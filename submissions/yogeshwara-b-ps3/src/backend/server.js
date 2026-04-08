@@ -27,15 +27,17 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
 
 const corsOptions = {
   origin: (origin, cb) => {
-    // Allow requests with no origin (curl, Postman, server-to-server)
-    if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
+    if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS: ${origin} not allowed`));
   },
   credentials: true,
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
+// Must register OPTIONS before other middleware
+app.options('/{*path}', cors(corsOptions));
 app.use(cors(corsOptions));
-app.options('/{*path}', cors(corsOptions)); // handle preflight for all routes
 app.use(express.json());
 
 // ── Routes ────────────────────────────────────────────────────────────────────
