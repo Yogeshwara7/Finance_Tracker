@@ -25,14 +25,17 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
   .map(o => o.trim())
   .filter(Boolean);
 
-app.use(cors({
+const corsOptions = {
   origin: (origin, cb) => {
     // Allow requests with no origin (curl, Postman, server-to-server)
     if (!origin || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS: ${origin} not allowed`));
   },
   credentials: true,
-}));
+};
+
+app.use(cors(corsOptions));
+app.options('*', cors(corsOptions)); // handle preflight for all routes
 app.use(express.json());
 
 // ── Routes ────────────────────────────────────────────────────────────────────
@@ -48,6 +51,6 @@ app.get('/health', (_req, res) => res.json({ status: 'ok' }));
 // ── Global error handler (must be last) ───────────────────────────────────────
 app.use(errorHandler);
 
-app.listen(PORT, () => {
+app.listen(PORT, '0.0.0.0', () => {
   console.log(`PS3 backend running on port ${PORT}`);
 });
