@@ -27,6 +27,7 @@ const allowedOrigins = (process.env.FRONTEND_ORIGIN || '')
 
 const corsOptions = {
   origin: (origin, cb) => {
+    console.log('Incoming origin:', origin, 'Allowed:', allowedOrigins);
     if (!origin || allowedOrigins.length === 0 || allowedOrigins.includes(origin)) return cb(null, true);
     cb(new Error(`CORS: ${origin} not allowed`));
   },
