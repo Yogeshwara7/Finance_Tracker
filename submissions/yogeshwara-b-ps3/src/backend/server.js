@@ -35,8 +35,6 @@ const corsOptions = {
   allowedHeaders: ['Content-Type', 'Authorization'],
 };
 
-// Must register OPTIONS before other middleware
-app.options('/{*path}', cors(corsOptions));
 app.use(cors(corsOptions));
 app.use(express.json());
 
