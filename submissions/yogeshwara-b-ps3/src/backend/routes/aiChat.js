@@ -69,8 +69,18 @@ IMPORTANT: Your response must ALWAYS be a single JSON object. Never respond with
 
 router.post('/', async (req, res) => {
   try {
-    const { message, conversationHistory = [], currentSlots = {} } = req.body;
+    const { message, conversationHistory = [], currentSlots = {}, userProfile = null } = req.body;
     if (!message) return res.status(400).json({ error: 'message is required.' });
+
+    // Build profile context so AI knows what's already known
+    const profileContext = userProfile
+      ? `\n\nUSER PROFILE (pre-filled, do NOT ask for these unless user wants to change):
+- full_name: ${userProfile.full_name}
+- default_card_type: ${userProfile.default_card_type}
+- contact_number: ${userProfile.contact_number}
+- email: ${userProfile.email}
+When creating an expense, skip asking for these fields. Just confirm them briefly and ask for the missing ones (category, amount, description, expense_date).`
+      : '';
 
     const slotsInfo = Object.keys(currentSlots).length > 0
       ? `\n\nAlready collected: ${JSON.stringify(currentSlots)}\nStill needed: ${
@@ -80,7 +90,7 @@ router.post('/', async (req, res) => {
       : '';
 
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT + slotsInfo },
+      { role: 'system', content: SYSTEM_PROMPT + profileContext + slotsInfo },
       ...conversationHistory.slice(-6).map((m) => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.text,

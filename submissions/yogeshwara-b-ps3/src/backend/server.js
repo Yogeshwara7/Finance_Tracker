@@ -8,6 +8,7 @@ import analyticsRouter from './routes/analytics.js';
 import faqRouter from './routes/faq.js';
 import aiParseRouter from './routes/aiParse.js';
 import aiChatRouter  from './routes/aiChat.js';
+import profileRouter  from './routes/profile.js';
 import errorHandler from './middleware/errorHandler.js';
 
 const app = express();
@@ -55,6 +56,7 @@ app.use('/api/analytics', analyticsRouter);
 app.use('/api/faq', faqRouter);
 app.use('/api/ai-parse', aiParseRouter);
 app.use('/api/ai-chat',  aiChatRouter);
+app.use('/api/profile',  profileRouter);
 
 // ── Health check ──────────────────────────────────────────────────────────────
 app.get('/health', (_req, res) => res.json({ status: 'ok' }));

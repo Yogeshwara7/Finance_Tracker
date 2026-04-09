@@ -172,8 +172,16 @@ const CHIPS = [
 ];
 
 // ── Main ──────────────────────────────────────────────────────────────────────
-export default function AIChatWindow() {
+export default function AIChatWindow({ profile }) {
   const { resetConversation } = useConversation();
+
+  // Profile fields that can be pre-filled (session-only overrides allowed)
+  const profileSlots = profile ? {
+    full_name:      profile.full_name,
+    card_type:      profile.default_card_type,
+    contact_number: profile.contact_number,
+    email:          profile.email,
+  } : {};
 
   const [messages,     setMessages]     = useState([]);
   const [input,        setInput]        = useState('');
@@ -224,7 +232,7 @@ export default function AIChatWindow() {
 
     try {
       const res = await Promise.race([
-        aiChat(userText, messages, slots),
+        aiChat(userText, messages, slots, profile),
         timeout,
       ]);
       console.log('[AI] Response:', res);
@@ -340,7 +348,7 @@ export default function AIChatWindow() {
 
       if (intent === 'create' && !flow) {
         setFlow('create');
-        setSlots({});
+        setSlots(profileSlots); // pre-fill from profile
         setExpenses(null);
       }
 
@@ -398,7 +406,7 @@ export default function AIChatWindow() {
         setFlow(intent); setSlots({}); setExpenses(null); setAwaitContact(true);
         addMsg('bot', reply || 'Enter your mobile number to fetch your expenses.');
       } else if (intent === 'create') {
-        setFlow('create'); setSlots({});
+        setFlow('create'); setSlots(profileSlots);
         addMsg('bot', reply || "Let's log a new expense. What's your full name?");
       } else {
         if (reply) addMsg('bot', reply);

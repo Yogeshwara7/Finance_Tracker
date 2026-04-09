@@ -5,22 +5,38 @@ import ChatWindow from './components/ChatWindow.jsx';
 import AIChatWindow from './components/AIChatWindow.jsx';
 import AnalyticsDashboard from './components/AnalyticsDashboard.jsx';
 import LoginPage from './components/LoginPage.jsx';
+import ProfileSetup from './components/ProfileSetup.jsx';
 import { useTour } from './hooks/useTour.js';
-import { useEffect } from 'react';
+import { useEffect, useState } from 'react';
+import { getProfile } from './api/client.js';
+import { supabase } from './lib/supabase.js';
 
 function AppShell() {
   const { currentTask, aiMode, toggleAiMode } = useConversation();
   const { user, loading, signOut } = useAuth();
   const { startTour, startIfFirstVisit, RULE_STEPS, AI_STEPS } = useTour();
+  const [profile, setProfile]           = useState(undefined); // undefined=loading, null=missing
+  const [profileLoading, setProfileLoading] = useState(true);
 
-  // Auto-start tour ONLY on first ever visit — never again after that
   useEffect(() => {
     if (user && !loading) {
       startIfFirstVisit(user.id, aiMode ? AI_STEPS : RULE_STEPS);
     }
-  }, [user, loading]); // intentionally NOT in aiMode deps — only runs once on login
+  }, [user, loading]);
 
-  if (loading) {
+  // Load profile once user is known
+  useEffect(() => {
+    if (!user) { setProfileLoading(false); return; }
+    supabase.auth.getSession().then(async ({ data: { session } }) => {
+      try {
+        const p = await getProfile(session.access_token);
+        setProfile(p); // null if not found
+      } catch { setProfile(null); }
+      finally { setProfileLoading(false); }
+    });
+  }, [user]);
+
+  if (loading || profileLoading) {
     return (
       <div className="h-screen flex items-center justify-center bg-gray-50">
         <span className="text-gray-400 text-sm">Loading…</span>
@@ -29,6 +45,9 @@ function AppShell() {
   }
 
   if (!user) return <LoginPage />;
+
+  // First-time user — collect profile
+  if (profile === null) return <ProfileSetup onComplete={(p) => setProfile(p)} />;
 
   const avatarUrl = user.user_metadata?.avatar_url;
   const firstName = user.user_metadata?.full_name?.split(' ')[0] || user.email;
@@ -93,7 +112,7 @@ function AppShell() {
 
       {/* ── Main ── */}
       <main className="flex-1 overflow-hidden flex flex-col">
-        {aiMode && <AIChatWindow />}
+        {aiMode && <AIChatWindow profile={profile} />}
         {!aiMode && !currentTask                                                                      && <TaskMenu />}
         {!aiMode && currentTask === 'analytics'                                                       && <AnalyticsDashboard />}
         {!aiMode && (currentTask === 'create' || currentTask === 'view' || currentTask === 'modify') && <ChatWindow />}

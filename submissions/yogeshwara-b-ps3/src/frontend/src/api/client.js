@@ -37,7 +37,9 @@ export const getAnalytics = (contact, period = 'this_month') =>
   call(() => http.get('/api/analytics', { params: { contact, period } }));
 export const queryFaq  = (query)   => call(() => http.post('/api/faq', { query }));
 export const aiParse   = (message) => call(() => http.post('/api/ai-parse', { message }));
-export const aiChat = (message, conversationHistory, currentSlots) => {
+export const getProfile  = (token) => call(() => http.get('/api/profile',  { headers: { Authorization: `Bearer ${token}` } }));
+export const saveProfile = (token, data) => call(() => http.post('/api/profile', data, { headers: { Authorization: `Bearer ${token}` } }));
+export const aiChat = (message, conversationHistory, currentSlots, userProfile = null) => {
   console.log('[API] aiChat →', import.meta.env.VITE_API_BASE_URL + '/api/ai-chat');
-  return call(() => http.post('/api/ai-chat', { message, conversationHistory, currentSlots }));
+  return call(() => http.post('/api/ai-chat', { message, conversationHistory, currentSlots, userProfile }));
 };
