@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip,
   ResponsiveContainer, Cell,
@@ -16,22 +16,28 @@ const PERIODS = [
   { value: 'all',           label: 'All Time' },
 ];
 
-export default function AnalyticsDashboard({ onBack }) {
+export default function AnalyticsDashboard({ onBack, initialContact }) {
   const { resetConversation } = useConversation();
   const handleBack = onBack || resetConversation;
-  const [contact, setContact] = useState('');
+  const [contact, setContact] = useState(initialContact || '');
   const [period,  setPeriod]  = useState('this_month');
   const [data,    setData]    = useState(null);
   const [loading, setLoading] = useState(false);
   const [error,   setError]   = useState('');
-  const [fetched, setFetched] = useState(false); // true after first successful fetch
+  const [fetched, setFetched] = useState(false);
+
+  // Auto-fetch if contact is pre-filled
+  useEffect(() => {
+    if (initialContact) handleFetch();
+  }, []);
 
   const handleFetch = async (overridePeriod) => {
-    if (!contact.trim()) return;
+    const c = initialContact || contact.trim();
+    if (!c) return;
     const activePeriod = overridePeriod || period;
     setLoading(true); setError(''); setData(null);
     try {
-      const res = await getAnalytics(contact.trim(), activePeriod);
+      const res = await getAnalytics(c, activePeriod);
       setData(res);
       setFetched(true);
     } catch (e) { setError(e.message); }
@@ -40,7 +46,7 @@ export default function AnalyticsDashboard({ onBack }) {
 
   const handlePeriodChange = (p) => {
     setPeriod(p);
-    if (data) handleFetch(p); // re-fetch immediately if already loaded
+    if (data) handleFetch(p);
   };
 
   const chartData = data

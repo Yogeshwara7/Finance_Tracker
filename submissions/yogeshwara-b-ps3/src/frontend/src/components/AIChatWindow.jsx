@@ -1,12 +1,6 @@
 /**
  * AIChatWindow — Smart Mode
- * Fixes applied:
- *  1. Single unified send handler (no duplication)
- *  2. Intent always overrides flow (no stale flow conflicts)
- *  3. Strict confirm detection regex
- *  4. AI call count via ref (no race condition)
- *  5. System actions take priority over AI reply
- *  6. Structured preview message (no magic strings)
+ * Single ReviewCard replaces both PreviewCard and SummaryCard.
  */
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { useConversation } from '../context/ConversationContext.jsx';
@@ -16,7 +10,6 @@ import {
   createExpense, getExpensesByContact,
   updateExpenseDate, deleteExpense, aiChat,
 } from '../api/client.js';
-
 const SLOT_ORDER     = ['full_name','card_type','category','amount','description','expense_date','contact_number','email'];
 const EXPENSE_FIELDS = ['category','amount','description','expense_date'];
 const AI_LIMIT       = 30;
@@ -39,9 +32,10 @@ function validateField(f, v) {
   return String(v).trim().length > 0;
 }
 
-const isConfirmText = (text) => /^(confirm|yes|ok|submit|proceed|done|looks good|correct|no changes|save it)$/i.test(text.trim());
+const isConfirmText = (t) =>
+  /\b(confirm|yes|ok|submit|proceed|done|looks good|correct|no changes|save it|yup|yep|sure|go ahead|all good)\b/i.test(t.trim());
 
-// ── Sub-components ────────────────────────────────────────────────────────────
+// ── TypingIndicator ───────────────────────────────────────────────────────────
 function TypingIndicator() {
   return (
     <div className="flex justify-start mb-3">
@@ -54,18 +48,31 @@ function TypingIndicator() {
   );
 }
 
-function SummaryCard({ slots, onEdit, onConfirm, submitting, submitError, onRetry, onCancel }) {
+// ── ReviewCard — single card for both preview + final confirm ─────────────────
+function ReviewCard({ slots, profile: p, onEdit, onConfirm, onCancel, submitting, submitError, onRetry }) {
+  // Merge profile into display slots (slots override profile)
+  const display = {
+    full_name:      slots.full_name      || p?.full_name,
+    card_type:      slots.card_type      || p?.default_card_type,
+    category:       slots.category,
+    amount:         slots.amount,
+    description:    slots.description,
+    expense_date:   slots.expense_date,
+    contact_number: slots.contact_number || p?.contact_number,
+    email:          slots.email          || p?.email,
+  };
+
   return (
-    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 my-3 shadow-sm">
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl p-4 my-3 shadow-sm max-w-sm">
       <p className="text-sm font-semibold text-blue-700 mb-3">Review your expense</p>
       <table className="w-full text-sm mb-4">
         <tbody>
           {SLOT_ORDER.map((field) => (
             <tr key={field} className="border-b border-blue-100 last:border-0">
-              <td className="py-1.5 text-gray-500 w-1/3">{FIELD_LABELS[field]}</td>
-              <td className="py-1.5 text-gray-800 font-medium">{String(slots[field] ?? '')}</td>
+              <td className="py-1.5 text-gray-500 w-1/3 text-xs">{FIELD_LABELS[field]}</td>
+              <td className="py-1.5 text-gray-800 font-medium text-xs">{String(display[field] ?? '')}</td>
               <td className="py-1.5 text-right">
-                <button onClick={() => onEdit(field)} className="text-xs text-blue-600 hover:underline">Edit</button>
+                <button onClick={() => onEdit(field)} className="text-xs text-blue-500 hover:underline">Edit</button>
               </td>
             </tr>
           ))}
@@ -87,6 +94,7 @@ function SummaryCard({ slots, onEdit, onConfirm, submitting, submitError, onRetr
   );
 }
 
+// ── DeleteConfirm ─────────────────────────────────────────────────────────────
 function DeleteConfirm({ expense, onConfirm, onCancel }) {
   return (
     <div className="bg-red-50 border border-red-200 rounded-2xl p-4 my-2 shadow-sm">
@@ -103,6 +111,7 @@ function DeleteConfirm({ expense, onConfirm, onCancel }) {
   );
 }
 
+// ── ExpenseList ───────────────────────────────────────────────────────────────
 function ExpenseList({ expenses, mode, onDelete, onUpdateDate, onRetry }) {
   const [editingId,    setEditingId]    = useState(null);
   const [newDate,      setNewDate]      = useState('');
@@ -137,10 +146,20 @@ function ExpenseList({ expenses, mode, onDelete, onUpdateDate, onRetry }) {
           ) : (
             <>
               <div className="flex justify-between items-start">
-                <div>
-                  <p className="font-medium text-gray-800">{exp.category} — ₹{Number(exp.amount).toLocaleString('en-IN')}</p>
-                  <p className="text-gray-500 text-xs">{exp.expense_date} · {exp.description}</p>
-                  <p className="text-gray-400 text-xs">{exp.card_type} · {exp.full_name}</p>
+                <div className="flex-1 min-w-0">
+                  <div className="flex items-center gap-2 mb-1">
+                    <span className="font-semibold text-gray-800">{exp.category}</span>
+                    <span className="text-gray-400 text-xs">·</span>
+                    <span className="font-semibold text-blue-600">₹{Number(exp.amount).toLocaleString('en-IN')}</span>
+                  </div>
+                  <p className="text-gray-700 text-xs mb-0.5">{exp.description}</p>
+                  <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400 mt-1">
+                    <span>📅 {exp.expense_date}</span>
+                    <span>💳 {exp.card_type}</span>
+                    <span>👤 {exp.full_name}</span>
+                    <span>📞 {exp.contact_number}</span>
+                    <span>✉️ {exp.email}</span>
+                  </div>
                 </div>
                 {mode === 'modify' && (
                   <div className="flex gap-2 ml-2 shrink-0">
@@ -166,43 +185,6 @@ function ExpenseList({ expenses, mode, onDelete, onUpdateDate, onRetry }) {
   );
 }
 
-// ── PreviewCard — structured, no magic strings ────────────────────────────────
-function PreviewCard({ collected, profile: p, onConfirm, onEdit }) {
-  return (
-    <div className="bg-blue-50 border border-blue-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm text-sm w-80">
-      <p className="text-blue-700 font-medium mb-2">Here's what I've collected:</p>
-      <table className="w-full mb-2">
-        <tbody>
-          {Object.entries(collected).map(([k, v]) => (
-            <tr key={k} className="border-b border-blue-100 last:border-0">
-              <td className="py-1 text-gray-500 w-2/5 text-xs">{FIELD_LABELS[k] || k}</td>
-              <td className="py-1 text-gray-800 font-medium text-xs">{String(v)}</td>
-              <td className="py-1 text-right">
-                <button onClick={() => onEdit(k)} className="text-xs text-blue-500 hover:underline">Edit</button>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-      {p && (
-        <>
-          <p className="text-gray-500 text-xs font-medium border-t border-blue-100 pt-2 mb-1">Your saved profile:</p>
-          <div className="space-y-0.5 mb-2">
-            <p className="text-gray-600 text-xs">• {p.full_name} · {p.default_card_type}</p>
-            <p className="text-gray-600 text-xs">• {p.contact_number}</p>
-            <p className="text-gray-600 text-xs truncate">• {p.email}</p>
-          </div>
-        </>
-      )}
-      <p className="text-gray-500 text-xs border-t border-blue-100 pt-2 mb-2">Anything to change? Or confirm to save.</p>
-      <button onClick={onConfirm}
-        className="w-full bg-blue-600 text-white py-1.5 rounded-xl text-xs font-medium hover:bg-blue-700 transition">
-        Looks good, confirm →
-      </button>
-    </div>
-  );
-}
-
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function AIChatWindow({ profile }) {
   const { resetConversation } = useConversation();
@@ -221,54 +203,49 @@ export default function AIChatWindow({ profile }) {
   const [slots,         setSlots]         = useState({});
   const [expenses,      setExpenses]      = useState(null);
   const [awaitContact,  setAwaitContact]  = useState(false);
-  const [showPreview,   setShowPreview]   = useState(false);  // pre-confirm review
-  const [showSummary,   setShowSummary]   = useState(false);  // final summary card
+  const [showReview,    setShowReview]    = useState(false); // single review card
   const [submitting,    setSubmitting]    = useState(false);
   const [submitError,   setSubmitError]   = useState('');
   const [showAnalytics, setShowAnalytics] = useState(false);
   const [lastContact,   setLastContact]   = useState(null);
   const [contactPrompt, setContactPrompt] = useState(false);
   const [editingField,  setEditingField]  = useState(null);
+  const [pendingAction, setPendingAction] = useState(null); // {action, target, new_date}
+  const [pendingFetch,  setPendingFetch]  = useState(null);
+  const [listDirty,     setListDirty]     = useState(false); // true after delete/update
 
-  // Fix #3: use ref for AI call count to avoid race conditions
-  const aiCallCountRef = useRef(0);
+  const aiCallCountRef  = useRef(0);
   const [aiCallDisplay, setAiCallDisplay] = useState(0);
-
   const bottomRef = useRef(null);
-  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); },
-    [messages, isLoading, showSummary, showPreview, expenses]);
 
-  const addMsg = (role, text) =>
-    setMessages((prev) => [...prev, { role, text, timestamp: new Date() }]);
+  useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); },
+    [messages, isLoading, showReview, expenses]);
+
+  const addMsg = (role, text, extra = {}) =>
+    setMessages((prev) => [...prev, { role, text, timestamp: new Date(), ...extra }]);
 
   const resetFlow = useCallback(() => {
     setFlow(null); setSlots({}); setExpenses(null);
-    setAwaitContact(false); setShowPreview(false); setShowSummary(false);
+    setAwaitContact(false); setShowReview(false);
     setSubmitError(''); setShowAnalytics(false);
-    setContactPrompt(false); setEditingField(null);
+    setContactPrompt(false); setEditingField(null); setPendingFetch(null); setPendingAction(null);
     resetConversation();
   }, [resetConversation]);
 
   const handleBack = () => { setMessages([]); resetFlow(); setLastContact(null); };
 
-  // ── Core AI call ────────────────────────────────────────────────────────────
   const callAI = async (userText, currentSlots) => {
     if (aiCallCountRef.current >= AI_LIMIT) {
-      addMsg('bot', '⚠️ AI limit reached for this session. Please refresh to continue.');
+      addMsg('bot', '⚠️ AI limit reached. Please refresh to continue.');
       return null;
     }
     aiCallCountRef.current += 1;
     setAiCallDisplay(aiCallCountRef.current);
-
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Response timed out. Please try again.')), 30000)
     );
     try {
-      const res = await Promise.race([
-        aiChat(userText, messages, currentSlots, profile),
-        timeout,
-      ]);
-      return res;
+      return await Promise.race([aiChat(userText, messages, currentSlots, profile), timeout]);
     } catch (e) {
       addMsg('bot', `⚠️ ${e.message}`);
       return null;
@@ -284,23 +261,39 @@ export default function AIChatWindow({ profile }) {
     return updated;
   };
 
-  const fetchExpenses = async (contact, currentFlow) => {
-    setIsLoading(true);
-    setContactPrompt(false);
+  const showReviewCard = (updatedSlots) => {
+    // Freeze previous review messages in history
+    setMessages(prev => prev.map(m => m.isReview ? { ...m, frozen: true } : m));
+    setMessages(prev => [...prev, {
+      role: 'bot', text: '', isReview: true, frozen: false,
+      slots: { ...updatedSlots }, timestamp: new Date(),
+    }]);
+    setShowReview(true);
+  };
+
+  const fetchExpenses = async (contact, fetchMode) => {
+    console.log(`[FETCH] contact="${contact}" mode="${fetchMode}"`);
+    setIsLoading(true); setContactPrompt(false);
     try {
       const data = await getExpensesByContact(contact);
-      setExpenses(data); setAwaitContact(false); setLastContact(contact);
-      addMsg('bot', data.length === 0
-        ? "No expenses found for that number. Want to try a different one?"
-        : `Found ${data.length} expense(s). ${currentFlow === 'modify' ? 'Use the buttons below to edit or delete.' : 'Here they are:'}`
-      );
+      setAwaitContact(false); setLastContact(contact);
+      if (data.length === 0) {
+        addMsg('bot', "No expenses found. Want to try a different number?");
+      } else {
+        const listMode = fetchMode === 'modify' ? 'modify' : 'view';
+        addMsg('bot', `Found ${data.length} expense(s):`, {
+          isExpenseList: true,
+          expenses: data,
+          listMode,
+        });
+      }
     } catch (e) {
-      addMsg('bot', `Couldn't fetch expenses: ${e.message}. Try again?`);
+      addMsg('bot', `Couldn't fetch expenses: ${e.message}`);
       setAwaitContact(true);
     } finally { setIsLoading(false); }
   };
 
-  const triggerContactFlow = (currentFlow) => {
+  const triggerContactFlow = () => {
     if (lastContact) {
       setContactPrompt(true);
       addMsg('bot', `I have ${lastContact} on file. Use the same number?`);
@@ -310,48 +303,95 @@ export default function AIChatWindow({ profile }) {
     }
   };
 
-  // ── Unified send handler (Fix #4) ──────────────────────────────────────────
   const send = useCallback(async (text) => {
-    if (!text || isLoading) return;
+    if (!text) return;
+    console.log(`[SEND] text="${text}" flow="${flow}"`);
     addMsg('user', text);
+    setMessages(prev => prev.map(m =>
+      m.isExpenseList && !m.frozen ? { ...m, frozen: true } : m
+    ));
     setIsLoading(true);
 
     try {
-      // ── Editing a field from preview/summary ────────────────────────────
+      // ── Pending action confirmation (date change / delete) ───────────
+      if (pendingAction) {
+        if (isConfirmText(text)) {
+          const { action, target, new_date } = pendingAction;
+          setPendingAction(null);
+          try {
+            if (action === 'update_date') {
+              await updateExpenseDate(target.id, new_date);
+              addMsg('bot', `Done! Date updated to ${new_date}.`);
+            } else if (action === 'delete') {
+              await deleteExpense(target.id);
+              addMsg('bot', `Deleted!`);
+            }
+            setFlow(null);
+          } catch (e) { addMsg('bot', `Something went wrong: ${e.message}`); }
+          setIsLoading(false); return;
+        } else if (/\bno\b|\bcancel\b|\bnope\b/i.test(text.trim())) {
+          setPendingAction(null);
+          addMsg('bot', 'Cancelled. Anything else?');
+          setIsLoading(false); return;
+        }
+        addMsg('bot', 'Please confirm with "yes" or cancel with "no".');
+        setIsLoading(false); return;
+      }
+
+      // ── Editing a field from review card ─────────────────────────────
       if (editingField) {
         const field = editingField;
         setEditingField(null);
+        setShowReview(false);
         let value = text.trim();
         if (field === 'amount') value = Number(value);
         if (validateField(field, value)) {
           const updated = { ...slots, [field]: value };
           setSlots(updated);
-          setShowPreview(false);
-          setShowSummary(false);
-          // Re-check if all expense fields still filled after edit
-          const allFilled = EXPENSE_FIELDS.every(f => validateField(f, updated[f]));
-          if (allFilled) {
-            setShowPreview(true);
-          } else {
-            addMsg('bot', `Updated ${FIELD_LABELS[field]}. What's the ${FIELD_LABELS[EXPENSE_FIELDS.find(f => !validateField(f, updated[f]))]}?`);
-          }
+          if (EXPENSE_FIELDS.every(f => validateField(f, updated[f]))) showReviewCard(updated);
+          else addMsg('bot', `Updated! What's the ${FIELD_LABELS[EXPENSE_FIELDS.find(f => !validateField(f, updated[f]))]}?`);
         } else {
           const res = await callAI(text, slots);
           const extracted = res?.fields?.[field];
           if (extracted && validateField(field, extracted)) {
             const updated = { ...slots, [field]: extracted };
             setSlots(updated);
-            setShowPreview(true);
+            showReviewCard(updated);
           } else {
             addMsg('bot', res?.reply || `That doesn't look right for ${FIELD_LABELS[field]}. Try again?`);
             setEditingField(field);
           }
         }
-        setIsLoading(false);
-        return;
+        setIsLoading(false); return;
       }
 
-      // ── Awaiting contact number ─────────────────────────────────────────
+      // ── Review card: confirm or change ───────────────────────────────
+      if (showReview) {
+        if (isConfirmText(text)) {
+          setIsLoading(false);
+          setShowReview(false);
+          setMessages(prev => prev.map(m => m.isReview ? { ...m, frozen: true } : m));
+          setSubmitting(true); setSubmitError('');
+          try {
+            const res = await createExpense({ ...profileSlots, ...slots });
+            addMsg('bot', `Expense saved! 🎉 (ID: ${res.id})`);
+            resetFlow();
+          } catch (err) { setSubmitError(err.message); setShowReview(true); }
+          finally { setSubmitting(false); }
+          return;
+        }
+        const res = await callAI(text, { ...profileSlots, ...slots });
+        if (res?.fields && Object.keys(res.fields).length > 0) {
+          const updated = mergeFields({ ...slots }, res.fields);
+          setSlots(updated);
+          setShowReview(false);
+          if (EXPENSE_FIELDS.every(f => validateField(f, updated[f]))) showReviewCard(updated);
+          else if (res.reply) addMsg('bot', res.reply);
+        } else if (res?.reply) addMsg('bot', res.reply);
+        setIsLoading(false); return;
+      }
+
+      // ── Awaiting contact number ───────────────────────────────────────
       if (awaitContact) {
         const phoneMatch = text.match(/(\+\d{1,4}\s?\d{10})/);
         if (phoneMatch) {
@@ -361,93 +401,90 @@ export default function AIChatWindow({ profile }) {
         }
         const res = await callAI(text, slots);
         if (res?.reply) addMsg('bot', res.reply);
-        setIsLoading(false);
-        return;
+        setIsLoading(false); return;
       }
 
-      // ── Pre-confirm stage: user responding to preview card ──────────────
-      if (showPreview && !showSummary) {
-        if (isConfirmText(text)) {
-          setShowPreview(false);
-          setShowSummary(true);
-          setIsLoading(false);
-          return;
-        }
-        // User wants to change something — let AI handle it
-        const res = await callAI(text, slots);
-        if (res?.fields && Object.keys(res.fields).length > 0) {
-          const updated = mergeFields(slots, res.fields);
-          setSlots(updated);
-          setShowPreview(false);
-          // Re-show preview with updated data
-          const allFilled = EXPENSE_FIELDS.every(f => validateField(f, updated[f]));
-          if (allFilled) setShowPreview(true);
-          else if (res.reply) addMsg('bot', res.reply);
-        } else {
-          if (res?.reply) addMsg('bot', res.reply);
-        }
-        setIsLoading(false);
-        return;
-      }
-
-      // ── Call AI ─────────────────────────────────────────────────────────
+      // ── AI decides everything ─────────────────────────────────────────
       const currentSlots = flow === 'create' ? { ...profileSlots, ...slots } : slots;
       const res = await callAI(text, currentSlots);
       if (!res) { setIsLoading(false); return; }
 
       const { reply, fields, intent } = res;
+      console.log(`[AI] intent="${intent}" reply="${reply?.slice(0,60)}" fields=`, fields);
 
-      // Fix #2: Intent always overrides flow
-      let activeFlow = flow;
-      if (intent && intent !== 'null' && intent !== flow) {
-        activeFlow = intent;
-        if (intent === 'analytics') {
-          setFlow('analytics'); setShowAnalytics(true);
-          if (reply) addMsg('bot', reply); // Fix #5: AI reply shown only when no system action
-          setIsLoading(false);
-          return;
-        }
-        if (intent === 'view' || intent === 'modify') {
-          setFlow(intent); setSlots({}); setExpenses(null);
-          setShowPreview(false); setShowSummary(false);
-          if (expenses !== null && flow === intent) {
-            addMsg('bot', intent === 'modify' ? 'Use the buttons below.' : 'Here are your expenses:');
-          } else {
-            if (reply) addMsg('bot', reply);
-            triggerContactFlow(intent);
-          }
-          setIsLoading(false);
-          return;
-        }
-        if (intent === 'create') {
-          setFlow('create');
-          setSlots(profileSlots);
-          setExpenses(null); setShowPreview(false); setShowSummary(false);
-          activeFlow = 'create';
-        }
+      // Analytics
+      if (intent === 'analytics') {
+        setFlow('analytics'); setShowAnalytics(true);
+        if (reply) addMsg('bot', reply);
+        setIsLoading(false); return;
       }
 
-      // ── Create flow: merge fields ───────────────────────────────────────
-      if (activeFlow === 'create') {
-        const base = { ...profileSlots, ...slots };
-        const updatedSlots = mergeFields(base, fields);
-        setSlots(updatedSlots);
+      // View / Modify
+      if (intent === 'view' || intent === 'modify') {
+        setFlow(intent); setSlots({}); setShowReview(false);
+        const contact = profile?.contact_number?.trim();
+        console.log(`[VIEW/MODIFY] intent="${intent}" contact="${contact}"`);
 
-        const allExpenseFilled = EXPENSE_FIELDS.every(f => validateField(f, updatedSlots[f]));
-
-        // Fix #5: system action takes priority — don't show AI reply if showing preview
-        if (allExpenseFilled) {
-          setShowPreview(true);
-          setIsLoading(false);
-          return;
+        // Direct action (date change / delete)
+        if (intent === 'modify' && fields?.action && contact) {
+          // Don't show AI reply — confirmation message is self-explanatory
+          try {
+            const allExpenses = await getExpensesByContact(contact);
+            let target = null;
+            if (fields.match_position) {
+              const pos = fields.match_position;
+              target = pos === -1 ? allExpenses[allExpenses.length - 1] : allExpenses[pos - 1];
+            } else if (fields.match_category) {
+              target = allExpenses.find(e => e.category.toLowerCase() === fields.match_category.toLowerCase());
+            } else if (fields.match_description) {
+              target = allExpenses.find(e => e.description.toLowerCase().includes(fields.match_description.toLowerCase()));
+            }
+            if (!target) {
+              addMsg('bot', "I couldn't find that expense. Can you be more specific?");
+            } else if (fields.action === 'update_date' && fields.new_date) {
+              // Ask for confirmation before changing
+              setPendingAction({ action: 'update_date', target, new_date: fields.new_date });
+              addMsg('bot', `Confirm: change date from ${target.expense_date} → ${fields.new_date}?`);
+            } else if (fields.action === 'delete') {
+              // Ask for confirmation before deleting
+              setPendingAction({ action: 'delete', target });
+              addMsg('bot', `Confirm: delete the ${target.category} expense (₹${Number(target.amount).toLocaleString('en-IN')} on ${target.expense_date})?`);
+            }
+          } catch (e) { addMsg('bot', `Something went wrong: ${e.message}`); }
+          setIsLoading(false); return;
         }
-        // Not all filled yet — show AI reply to ask for next field
-        if (reply) addMsg('bot', reply);
-        setIsLoading(false);
+
+        // Fetch list
+        if (contact) {
+          if (reply) addMsg('bot', reply);
+          setIsLoading(false);
+          await fetchExpenses(contact, intent);
+        } else {
+          if (reply) addMsg('bot', reply);
+          setAwaitContact(true);
+          addMsg('bot', 'Enter your mobile number to continue.');
+          setIsLoading(false);
+        }
         return;
       }
 
-      // ── Default: show AI reply ──────────────────────────────────────────
+      // Create
+      if (intent === 'create' || flow === 'create') {
+        if (intent === 'create' && flow !== 'create') {
+          setFlow('create'); setSlots(profileSlots); setShowReview(false);
+        }
+        const base = { ...profileSlots, ...slots };
+        const updatedSlots = mergeFields(base, fields);
+        setSlots(updatedSlots);
+        if (EXPENSE_FIELDS.every(f => validateField(f, updatedSlots[f]))) {
+          showReviewCard(updatedSlots);
+          setIsLoading(false); return;
+        }
+        if (reply) addMsg('bot', reply);
+        setIsLoading(false); return;
+      }
+
+      // Default — just show AI reply
       if (reply) addMsg('bot', reply);
 
     } catch (e) {
@@ -455,39 +492,29 @@ export default function AIChatWindow({ profile }) {
     } finally {
       setIsLoading(false);
     }
-  }, [isLoading, editingField, awaitContact, showPreview, showSummary, flow, slots, expenses, lastContact, profile, profileSlots, messages]);
+  }, [editingField, awaitContact, showReview, flow, slots, profile, profileSlots, messages]);
 
-  const handleSend = () => {
-    const text = input.trim();
-    if (!text) return;
-    setInput('');
-    send(text);
-  };
-
-  const handleKeyDown = (e) => {
-    if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
-  };
+  const handleSend = () => { const t = input.trim(); if (!t) return; setInput(''); send(t); };
+  const handleKeyDown = (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); } };
 
   const handleConfirmSubmit = async () => {
     setSubmitting(true); setSubmitError('');
     try {
-      const res = await createExpense(slots);
-      setShowSummary(false); setShowPreview(false);
+      const fullSlots = { ...profileSlots, ...slots };
+      const res = await createExpense(fullSlots);
+      setShowReview(false);
+      setMessages(prev => prev.map(m => m.isReview ? { ...m, frozen: true } : m));
       addMsg('bot', `Expense saved! 🎉 (ID: ${res.id})\n\nWant to log another or do something else?`);
       resetFlow();
-    } catch (err) {
-      setSubmitError(`Something went wrong: ${err.message}`);
-    } finally { setSubmitting(false); }
+    } catch (err) { setSubmitError(err.message); }
+    finally { setSubmitting(false); }
   };
 
   const handleEditField = (field) => {
     setEditingField(field);
-    setShowPreview(false);
-    setShowSummary(false);
+    setShowReview(false);
     addMsg('bot', `What should I change ${FIELD_LABELS[field]} to?`);
   };
-
-  const allFilled = SLOT_ORDER.every((s) => validateField(s, slots[s]));
 
   if (showAnalytics) {
     return (
@@ -495,21 +522,12 @@ export default function AIChatWindow({ profile }) {
         <div className="px-4 sm:px-6 pt-3 pb-1 shrink-0">
           <button onClick={handleBack} className="text-sm text-blue-600 hover:underline">← Back to Menu</button>
         </div>
-        <AnalyticsDashboard onBack={() => {
-          setShowAnalytics(false); setFlow(null);
-          addMsg('bot', 'Back to chat! What else can I help you with?');
-        }} />
+        <AnalyticsDashboard
+          initialContact={profile?.contact_number}
+          onBack={() => { setShowAnalytics(false); setFlow(null); addMsg('bot', 'Back to chat! What else can I help you with?'); }} />
       </div>
     );
   }
-
-  // Collected expense fields for preview card
-  const collectedForPreview = {
-    category:     slots.category,
-    amount:       slots.amount,
-    description:  slots.description,
-    expense_date: slots.expense_date,
-  };
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
@@ -521,7 +539,6 @@ export default function AIChatWindow({ profile }) {
 
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
         <div className="max-w-2xl mx-auto">
-
           {messages.length === 0 && (
             <div className="flex flex-col items-center justify-center py-20 gap-4 text-gray-400">
               <span className="text-6xl">💬</span>
@@ -532,10 +549,11 @@ export default function AIChatWindow({ profile }) {
             </div>
           )}
 
-          {messages.map((msg, i) => <MessageBubble key={i} message={msg} />)}
+          {messages.map((msg, i) => (
+            <MessageBubble key={msg.timestamp + '-' + i} message={msg} onDirty={() => setListDirty(true)} />
+          ))}
           {isLoading && <TypingIndicator />}
 
-          {/* Contact prompt */}
           {contactPrompt && !isLoading && (
             <div className="flex items-center gap-2 my-2 flex-wrap">
               <button onClick={() => { setContactPrompt(false); fetchExpenses(lastContact, flow); }}
@@ -553,32 +571,18 @@ export default function AIChatWindow({ profile }) {
             <p className="text-xs text-gray-300 text-right mt-1">AI calls: {aiCallDisplay}/{AI_LIMIT}</p>
           )}
 
-          {/* Expense list */}
-          {expenses !== null && (flow === 'view' || flow === 'modify') && !isLoading && (
-            <ExpenseList expenses={expenses} mode={flow}
-              onDelete={async (id) => { await deleteExpense(id); setExpenses((p) => p.filter((e) => e.id !== id)); }}
-              onUpdateDate={async (id, date) => { const u = await updateExpenseDate(id, date); setExpenses((p) => p.map((e) => e.id === id ? u : e)); }}
-              onRetry={() => { setExpenses(null); setAwaitContact(true); addMsg('bot', 'Enter your mobile number:'); }}
-            />
-          )}
-
-          {/* Pre-confirm preview card — Fix #6: structured component, no magic string */}
-          {showPreview && flow === 'create' && !showSummary && !isLoading && (
-            <PreviewCard
-              collected={collectedForPreview}
+          {/* Expense list is now embedded in message history via isExpenseList messages */}
+          {/* Single ReviewCard — no separate summary card */}
+          {showReview && flow === 'create' && !isLoading && (
+            <ReviewCard
+              slots={slots}
               profile={profile}
-              onConfirm={() => { setShowPreview(false); setShowSummary(true); }}
               onEdit={handleEditField}
-            />
-          )}
-
-          {/* Final summary card */}
-          {showSummary && flow === 'create' && allFilled && (
-            <SummaryCard slots={slots}
-              onEdit={handleEditField} onConfirm={handleConfirmSubmit}
-              submitting={submitting} submitError={submitError}
+              onConfirm={handleConfirmSubmit}
+              onCancel={() => { setShowReview(false); setSubmitError(''); resetFlow(); }}
+              submitting={submitting}
+              submitError={submitError}
               onRetry={handleConfirmSubmit}
-              onCancel={() => { setShowSummary(false); setSubmitError(''); resetFlow(); }}
             />
           )}
 
@@ -595,10 +599,10 @@ export default function AIChatWindow({ profile }) {
             className="flex-1 border-2 border-gray-300 rounded-xl px-4 py-3 text-sm
                        focus:outline-none focus:border-blue-400 bg-white shadow-sm"
           />
-          <button onClick={handleSend} disabled={!input.trim() || isLoading}
+          <button onClick={handleSend} disabled={!input.trim()}
             className="bg-blue-600 text-white px-6 py-3 rounded-xl text-sm font-medium
                        hover:bg-blue-700 disabled:opacity-40 transition shrink-0">
-            Send
+            {isLoading ? '...' : 'Send'}
           </button>
         </div>
       </div>

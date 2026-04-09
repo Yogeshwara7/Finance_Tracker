@@ -1,10 +1,10 @@
 import { useConversation } from '../context/ConversationContext.jsx';
 
 const TASKS = [
-  { id: 'create',    label: '➕ Create Expense',          desc: 'Log a new expense via guided chat',    tourId: 'task-create'    },
-  { id: 'view',      label: '📋 View Expenses',            desc: 'Look up expenses by mobile number',    tourId: 'task-view'      },
-  { id: 'modify',    label: '✏️ Modify / Delete Expense',  desc: 'Update or remove an existing record',  tourId: 'task-modify'    },
-  { id: 'analytics', label: '📊 View Analytics',           desc: 'Charts and spending summary',          tourId: 'task-analytics' },
+  { id: 'create',    label: '➕ Create Expense',          desc: 'Log a new expense — profile pre-filled, just add details', tourId: 'task-create'    },
+  { id: 'view',      label: '📋 View Expenses',            desc: 'See all your recorded expenses',                           tourId: 'task-view'      },
+  { id: 'modify',    label: '✏️ Modify / Delete Expense',  desc: 'Change date or delete an expense — confirm before saving', tourId: 'task-modify'    },
+  { id: 'analytics', label: '📊 View Analytics',           desc: 'Spending breakdown by category and time period',           tourId: 'task-analytics' },
 ];
 
 export default function TaskMenu() {

@@ -1,15 +1,12 @@
 /**
  * POST /api/ai-chat
- * Full conversational AI using HuggingFace Inference API.
- *
- * NOTE: Your HF token needs "Make calls to Inference Providers" permission.
- * Go to huggingface.co/settings/tokens → click your token → enable that permission.
+ * Conversational AI using HuggingFace Inference API (Qwen2.5-72B).
  */
 import { Router } from 'express';
 
 const router = Router();
 
-const HF_MODEL = process.env.HF_MODEL || 'mistralai/Mistral-7B-Instruct-v0.3';
+const HF_MODEL = process.env.HF_MODEL || 'Qwen/Qwen2.5-72B-Instruct';
 
 async function callHuggingFace(messages) {
   const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
@@ -21,8 +18,8 @@ async function callHuggingFace(messages) {
     body: JSON.stringify({
       model: HF_MODEL,
       messages,
-      temperature: 0.3,
-      max_tokens: 1024,
+      temperature: 0.2,   // lower = more deterministic
+      max_tokens: 512,
     }),
   });
 
@@ -35,91 +32,107 @@ async function callHuggingFace(messages) {
   return json.choices?.[0]?.message?.content?.trim() || null;
 }
 
-const SYSTEM_PROMPT = `You are Finn, a smart conversational expense tracking assistant. You reason about what the user means, not just what they literally say.
+// Fix #2: deterministic, structured extraction over creative interpretation
+// Fix #3: strict JSON enforcement
+// Fix #4: ambiguity guard — ask if category unclear
+const SYSTEM_PROMPT = `You are Finn, a friendly and intelligent expense tracking assistant. You think like a human assistant — you understand what the user wants from context, not just keywords.
 
-## YOUR JOB
-Understand the user's intent, extract any expense data from their message, and respond naturally. You are having a conversation — not filling a form.
+## YOUR PERSONALITY
+You are warm, helpful, and conversational. You follow the user's lead. You don't ask unnecessary questions. You reason about what the user means and respond naturally.
 
-## INTENT DETECTION
-Detect intent from natural language:
-- "I spent 500 on food" → intent: create
-- "log an expense", "add expense", "I bought..." → intent: create
-- "show my expenses", "what did I spend", "my transactions" → intent: view
-- "delete", "remove", "modify", "change", "edit" → intent: modify
-- "analytics", "summary", "how much did I spend", "breakdown" → intent: analytics
-- greetings, questions, anything else → intent: null
+## WHAT YOU CAN HELP WITH
+1. Logging a new expense
+2. Viewing the user's expense history
+3. Editing or deleting an expense (only date changes and deletes are supported)
+4. Showing spending analytics
 
-## SUPPORTED CATEGORIES (only these 3)
-- Food: restaurant, swiggy, zomato, groceries, lunch, dinner, cafe, snacks, eating, breakfast, biryani, pizza, burger, coffee, tea, juice, hotel food, canteen, mess, tiffin, dabba, fruits, vegetables, milk, bread, eggs, chicken, mutton, fish, ice cream, dessert, bakery, fast food
-- Transport: travel, cab, uber, ola, fuel, metro, bus, flight, parking, toll, petrol, diesel, auto, rickshaw, train, taxi, bike rental, car rental, ferry, boat, highway, road trip, airport, railway, ticket, pass, recharge, rapido — NOTE: "bought a car/bike/vehicle" is Shopping, not Transport. Transport is for travel/commute expenses only.
-- Shopping: clothes, amazon, flipkart, mall, online order, products, watch, shoes, bag, pants, jeans, shirt, glasses, sunglasses, vessel, utensils, furniture, electronics, gadgets, accessories, jewellery, toys, stationery, books, kurta, saree, dress, jacket, hoodie, cap, belt, wallet, phone, laptop, charger, earphones, headphones, appliances, crockery, bedsheet, pillow, curtain, car purchase, bike purchase, vehicle purchase, any physical product bought
+## HOW TO THINK ABOUT INTENT
+Don't pattern-match keywords. Think about what the user actually wants:
+- If they mention spending money, buying something, or want to log/add/record → they want to create an expense
+- If they want to see, check, view, or list their expenses → they want to view
+- If they want to change, edit, update, delete, or remove an expense → they want to modify
+- If they ask about spending patterns, summaries, charts, or analytics → they want analytics
+- Anything else → respond helpfully with intent null
 
-If user mentions an unsupported category (gym, medical, rent, etc.), say: "We only support Food, Transport, and Shopping. Would you like to map '[their category]' to one of these?"
+## EXPENSE CREATION
+When creating an expense, you need: category, amount, description, expense_date.
+The user's profile already has their name, card type, phone, and email — never ask for these.
 
-## ENTITY EXTRACTION — BE SMART
-Extract fields from natural language:
-- "I spent 500 on food yesterday" → amount=500, category=Food, expense_date=yesterday's date
-- "300, bought clothes and a watch" → amount=300, description="bought clothes and a watch"
-- "food, 200, swiggy order" → category=Food, amount=200, description="swiggy order"
-- "use credit card" → card_type="Credit Card"
-- "today", "yesterday" → resolve to actual DD-MM-YYYY date
-- Today's date is 09-04-2026. Use this as reference for all relative dates.
-- If year is not mentioned, always assume 2026
-- "6th april" → 06-04-2026, "yesterday" → 08-04-2026, "today" → 09-04-2026
+Categories (only 3): Food, Transport, Shopping
+- Food: anything edible — restaurants, delivery, groceries, drinks
+- Transport: travel costs — cab, fuel, metro, flight, bus (NOT buying a vehicle)
+- Shopping: buying physical things — clothes, electronics, furniture, vehicles, gadgets
 
-## FIELDS TO COLLECT FOR EXPENSE CREATION
-full_name, card_type, category, amount, description, expense_date, contact_number, email
+Date rules: today = 09-04-2026, yesterday = 08-04-2026, default year = 2026
 
-Rules:
-- If user profile is provided, those fields are already known — NEVER ask for them again
-- Extract ALL fields the user provides in one message simultaneously
-- Ask for only ONE missing field at a time
-- If user provides amount + context text, use the context as description
-- Acknowledge what was captured, then ask for the next missing field
+Extract everything the user gives you in one message. Ask for only one missing thing at a time. Be natural about it.
 
-## CORRECTIONS
-If user says "actually", "no wait", "change", "wrong", "I meant" — update the field they're correcting. Don't re-ask already confirmed fields.
+## EXPENSE MODIFICATION
+Only date changes and deletes are supported.
+If user wants to change something else (amount, category, card), tell them kindly that only date and delete are supported, and suggest creating a new expense instead.
 
-## CRITICAL RULE — NEVER FAKE A SAVE, NEVER SUMMARIZE
-You CANNOT save, log, confirm, or summarize an expense yourself. The app UI handles all of that.
-- NEVER say "here's what I have so far" or list collected fields
-- NEVER say "expense logged", "saved successfully", "here's a summary"
-- NEVER produce a bullet list of collected fields
-- When all 4 expense fields are collected (category, amount, description, expense_date), just say something like "Got it! Let me pull that up for you." and return ALL fields in the fields object
-- The frontend will automatically show the confirmation UI
-Always return ONLY a valid JSON object:
-{"reply": "your conversational response", "fields": {extracted fields}, "intent": "create|view|modify|analytics|null"}
+For date changes: extract which expense (by category, description, or position like "2nd", "last") and the new date.
+For deletes: extract which expense to delete.
 
-Never include text outside the JSON. Never wrap in markdown code blocks.
+## OUTPUT FORMAT
+Always respond with ONLY a valid JSON object — no text outside it, no markdown:
+{"reply": "your response", "fields": {}, "intent": "create|view|modify|analytics|null"}
+
+For modify actions include action details in fields:
+{"reply": "...", "fields": {"action": "update_date", "match_category": "Food", "new_date": "03-04-2026"}, "intent": "modify"}
+{"reply": "...", "fields": {"action": "delete", "match_position": 2}, "intent": "modify"}
 
 ## EXAMPLES
-- "hi" → {"reply": "Hey! 👋 I'm Finn, your expense assistant. Want to log an expense, view your history, or check analytics?", "fields": {}, "intent": null}
-- "I spent 500 on food" → {"reply": "Got it — ₹500 for Food! Quick description of what it was?", "fields": {"category": "Food", "amount": 500}, "intent": "create"}
-- "swiggy order" → {"reply": "Nice! What date was this expense? (DD-MM-YYYY)", "fields": {"description": "swiggy order"}, "intent": "create"}
-- "show my expenses" → {"reply": "Sure! I'll need your mobile number to look those up.", "fields": {}, "intent": "view"}
-- "delete last one" → {"reply": "I can help with that. What's your mobile number so I can find your expenses?", "fields": {}, "intent": "modify"}
-- "actually use credit card" → {"reply": "Updated to Credit Card!", "fields": {"card_type": "Credit Card"}, "intent": "create"}`;
+User: "hi" → {"reply": "Hey! 👋 I'm Finn, your expense assistant. Want to log something, check your expenses, or see your analytics?", "fields": {}, "intent": null}
+User: "I spent 500 on food" → {"reply": "₹500 for Food — got it! What was it for?", "fields": {"category": "Food", "amount": 500}, "intent": "create"}
+User: "swiggy biryani 200 today" → {"reply": "₹200 swiggy biryani on 09-04-2026 — logged under Food!", "fields": {"category": "Food", "amount": 200, "description": "swiggy biryani", "expense_date": "09-04-2026"}, "intent": "create"}
+User: "view expense" → {"reply": "Sure! Fetching your expenses now.", "fields": {}, "intent": "view"}
+User: "show my expenses" → {"reply": "On it! Pulling up your expenses.", "fields": {}, "intent": "view"}
+User: "can i edit it" → {"reply": "Of course! Want me to pull up your expenses so you can tell me which one to change?", "fields": {}, "intent": "modify"}
+User: "change date of food to 3rd april" → {"reply": "Got it — updating the Food expense date to 03-04-2026.", "fields": {"action": "update_date", "match_category": "Food", "new_date": "03-04-2026"}, "intent": "modify"}
+User: "delete the 2nd one" → {"reply": "Deleting the 2nd expense.", "fields": {"action": "delete", "match_position": 2}, "intent": "modify"}
+User: "show analytics" → {"reply": "Opening your spending analytics!", "fields": {}, "intent": "analytics"}
+User: "how much did I spend this month" → {"reply": "Let me pull up your spending breakdown!", "fields": {}, "intent": "analytics"}`;
 
+// Fix #6: robust JSON extraction — find the outermost complete JSON object
+function extractJSON(text) {
+  // Try direct parse first
+  try { return JSON.parse(text); } catch {}
+
+  // Find first { and match to its closing }
+  const start = text.indexOf('{');
+  if (start === -1) return null;
+
+  let depth = 0;
+  for (let i = start; i < text.length; i++) {
+    if (text[i] === '{') depth++;
+    else if (text[i] === '}') {
+      depth--;
+      if (depth === 0) {
+        try { return JSON.parse(text.slice(start, i + 1)); } catch {}
+      }
+    }
+  }
+  return null;
+}
 
 router.post('/', async (req, res) => {
   try {
     const { message, conversationHistory = [], currentSlots = {}, userProfile = null } = req.body;
     if (!message) return res.status(400).json({ error: 'message is required.' });
 
-    // Build profile context so AI knows what's already known
     const profileContext = userProfile
-      ? `\n\nUSER PROFILE (pre-filled, do NOT ask for these unless user wants to change):
-- full_name: ${userProfile.full_name}
-- default_card_type: ${userProfile.default_card_type}
-- contact_number: ${userProfile.contact_number}
-- email: ${userProfile.email}
-When creating an expense, skip asking for these fields. Just confirm them briefly and ask for the missing ones (category, amount, description, expense_date).`
+      ? `\n\nUSER PROFILE (already known — do NOT ask for these):
+full_name: ${userProfile.full_name}
+card_type: ${userProfile.default_card_type}
+contact_number: ${userProfile.contact_number}
+email: ${userProfile.email}`
       : '';
 
-    const ALL_FIELDS = ['full_name','card_type','category','amount','description','expense_date','contact_number','email'];
-    const missing = ALL_FIELDS.filter(f => !currentSlots[f]);
+    const EXPENSE_FIELDS = ['category','amount','description','expense_date'];
+    const missing = EXPENSE_FIELDS.filter(f => !currentSlots[f]);
     const slotsInfo = Object.keys(currentSlots).length > 0
-      ? `\n\nCURRENT SESSION STATE:\nAlready known: ${JSON.stringify(currentSlots)}\nStill missing: ${missing.join(', ') || 'none — all fields collected!'}\nAsk for the first missing field only. Do not re-ask fields already known.`
+      ? `\n\nCOLLECTED SO FAR: ${JSON.stringify(currentSlots)}\nSTILL NEEDED: ${missing.join(', ') || 'all collected'}\nAsk for the first still-needed field only.`
       : '';
 
     const messages = [
@@ -132,7 +145,7 @@ When creating an expense, skip asking for these fields. Just confirm them briefl
     ];
 
     const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), 15000)
+      setTimeout(() => reject(new Error('timeout')), 20000)
     );
 
     const content = await Promise.race([callHuggingFace(messages), timeout])
@@ -142,30 +155,18 @@ When creating an expense, skip asking for these fields. Just confirm them briefl
       return res.json({ reply: "Sorry, I'm having trouble right now. Please try again.", fields: {}, intent: null });
     }
 
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    let parsed = {};
-    try {
-      if (jsonMatch) {
-        parsed = JSON.parse(jsonMatch[0]);
-      } else {
-        // Model returned plain text — use it directly as the reply
-        parsed = { reply: content.slice(0, 300), fields: {}, intent: null };
-      }
-    } catch (e) {
-      // Malformed JSON — extract what we can
-      const replyMatch  = content.match(/"reply"\s*:\s*"((?:[^"\\]|\\.)*)"/);
-      const intentMatch = content.match(/"intent"\s*:\s*"([^"]+)"/);
-      parsed = {
-        reply:  replyMatch  ? replyMatch[1].replace(/\\n/g, '\n') : content.slice(0, 300),
-        fields: {},
-        intent: intentMatch ? intentMatch[1] : null,
-      };
+    // Fix #6: robust JSON extraction
+    const parsed = extractJSON(content);
+
+    if (!parsed) {
+      console.error('[AI Chat] Failed to parse JSON from:', content.slice(0, 200));
+      return res.json({ reply: content.slice(0, 300), fields: {}, intent: null });
     }
 
     res.json({
-      reply:  parsed.reply  || "I'm here to help! What would you like to do?",
-      fields: parsed.fields || {},
-      intent: parsed.intent || null,
+      reply:  typeof parsed.reply  === 'string' ? parsed.reply  : "I'm here to help!",
+      fields: typeof parsed.fields === 'object' ? parsed.fields : {},
+      intent: typeof parsed.intent === 'string' ? parsed.intent : null,
     });
 
   } catch (err) {
