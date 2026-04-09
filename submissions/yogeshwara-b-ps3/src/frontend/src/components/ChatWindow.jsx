@@ -248,7 +248,7 @@ function ExpenseList({ expenses, mode, onDelete, onUpdateDate, onRetryContact })
 }
 
 // ── Main ChatWindow ───────────────────────────────────────────────────────────
-export default function ChatWindow() {
+export default function ChatWindow({ profile }) {
   const {
     messages, currentTask, slots, isLoading,
     addMessage, sendUserMessage, setSlots, resetConversation,
@@ -259,10 +259,27 @@ export default function ChatWindow() {
   const [showSummary,  setShowSummary]  = useState(false);
   const [submitting,   setSubmitting]   = useState(false);
   const [submitError,  setSubmitError]  = useState('');
-  const [expenses,     setExpenses]     = useState(null);   // null = not yet fetched
-  const [editingField, setEditingField] = useState(null);   // field being amended via Edit btn
-  const [awaitingContact, setAwaitingContact] = useState(false); // re-entry mode
+  const [expenses,     setExpenses]     = useState(null);
+  const [editingField, setEditingField] = useState(null);
+  const [awaitingContact, setAwaitingContact] = useState(false);
   const bottomRef = useRef(null);
+
+  // Pre-fill profile slots on mount for create task
+  useEffect(() => {
+    if (currentTask === 'create' && profile) {
+      setSlots(prev => ({
+        ...prev,
+        full_name:      prev.full_name      || profile.full_name,
+        card_type:      prev.card_type      || profile.default_card_type,
+        contact_number: prev.contact_number || profile.contact_number,
+        email:          prev.email          || profile.email,
+      }));
+    }
+    // For view/modify, auto-fetch using profile contact
+    if ((currentTask === 'view' || currentTask === 'modify') && profile?.contact_number) {
+      fetchExpenses(profile.contact_number);
+    }
+  }, [currentTask]);
 
   useEffect(() => {
     bottomRef.current?.scrollIntoView({ behavior: 'smooth' });

@@ -19,10 +19,10 @@ function AppShell() {
   const [profileLoading, setProfileLoading] = useState(true);
 
   useEffect(() => {
-    if (user && !loading) {
+    if (user && !loading && profile) {
       startIfFirstVisit(user.id, aiMode ? AI_STEPS : RULE_STEPS);
     }
-  }, [user, loading]);
+  }, [user, loading, profile]);
 
   // Load profile once user is known
   useEffect(() => {
@@ -114,8 +114,8 @@ function AppShell() {
       <main className="flex-1 overflow-hidden flex flex-col">
         {aiMode && <AIChatWindow profile={profile} />}
         {!aiMode && !currentTask                                                                      && <TaskMenu />}
-        {!aiMode && currentTask === 'analytics'                                                       && <AnalyticsDashboard />}
-        {!aiMode && (currentTask === 'create' || currentTask === 'view' || currentTask === 'modify') && <ChatWindow />}
+        {!aiMode && currentTask === 'analytics' && <AnalyticsDashboard initialContact={profile?.contact_number} />}
+        {!aiMode && (currentTask === 'create' || currentTask === 'view' || currentTask === 'modify') && <ChatWindow profile={profile} />}
       </main>
     </div>
   );

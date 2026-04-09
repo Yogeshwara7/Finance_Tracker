@@ -50,9 +50,9 @@ const HINTS = {
 };
 
 const TASK_OPENERS = {
-  create: "Let's log a new expense. I'll guide you step by step.\n\nWhat's your full name? (first and last name)",
-  view:   "Sure! Enter your mobile number (with country code) and I'll fetch your expenses.",
-  modify: "To modify or delete an expense, enter your mobile number (with country code) first.",
+  create: "I already have your profile details on file.\n\nJust tell me: what category? (Food / Transport / Shopping)",
+  view:   "Fetching your expenses now...",
+  modify: "Fetching your expenses — you can change the date or delete any of them.",
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -531,7 +531,7 @@ function reducer(state, action) {
     case 'SET_SLOT':
       return { ...state, slots: { ...state.slots, [action.field]: action.value } };
     case 'RESET':
-      return { ...initialState };
+      return { ...initialState, aiMode: state.aiMode };
     case 'TOGGLE_AI':
       return { ...state, aiMode: !state.aiMode };
     default:
