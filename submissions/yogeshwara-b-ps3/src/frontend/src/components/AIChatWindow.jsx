@@ -1,14 +1,14 @@
 /**
- * AIChatWindow — Smart Mode: full conversational AI.
- *
- * Every message goes to the AI which:
- *  1. Generates a natural conversational reply
- *  2. Extracts expense fields simultaneously
- *  3. Detects intent (create/view/modify/analytics)
- *
- * The AI drives the conversation — no rigid slot-filling prompts.
+ * AIChatWindow — Smart Mode
+ * Fixes applied:
+ *  1. Single unified send handler (no duplication)
+ *  2. Intent always overrides flow (no stale flow conflicts)
+ *  3. Strict confirm detection regex
+ *  4. AI call count via ref (no race condition)
+ *  5. System actions take priority over AI reply
+ *  6. Structured preview message (no magic strings)
  */
-import { useState, useRef, useEffect } from 'react';
+import { useState, useRef, useEffect, useCallback } from 'react';
 import { useConversation } from '../context/ConversationContext.jsx';
 import MessageBubble from './MessageBubble.jsx';
 import AnalyticsDashboard from './AnalyticsDashboard.jsx';
@@ -17,18 +17,18 @@ import {
   updateExpenseDate, deleteExpense, aiChat,
 } from '../api/client.js';
 
-const SLOT_ORDER = ['full_name','card_type','category','amount','description','expense_date','contact_number','email'];
-const AI_LIMIT   = 30;
+const SLOT_ORDER     = ['full_name','card_type','category','amount','description','expense_date','contact_number','email'];
+const EXPENSE_FIELDS = ['category','amount','description','expense_date'];
+const AI_LIMIT       = 30;
 
 const FIELD_LABELS = {
   full_name: 'Full Name', card_type: 'Card Type', category: 'Category',
-  amount: 'Amount', description: 'Description', expense_date: 'Expense Date',
-  contact_number: 'Mobile Number', email: 'Email',
+  amount: 'Amount (₹)', description: 'Description', expense_date: 'Date',
+  contact_number: 'Mobile', email: 'Email',
 };
 
-// ── Validation ────────────────────────────────────────────────────────────────
 function validateField(f, v) {
-  if (!v) return false;
+  if (v === null || v === undefined || v === '') return false;
   if (f === 'amount')         return !isNaN(Number(v)) && Number(v) > 0;
   if (f === 'card_type')      return ['Debit Card','Credit Card'].includes(v);
   if (f === 'category')       return ['Transport','Shopping','Food'].includes(v);
@@ -38,6 +38,8 @@ function validateField(f, v) {
   if (f === 'full_name')      return String(v).trim().split(/\s+/).length >= 2;
   return String(v).trim().length > 0;
 }
+
+const isConfirmText = (text) => /^(confirm|yes|ok|submit|proceed|done|looks good|correct|no changes|save it)$/i.test(text.trim());
 
 // ── Sub-components ────────────────────────────────────────────────────────────
 function TypingIndicator() {
@@ -164,18 +166,47 @@ function ExpenseList({ expenses, mode, onDelete, onUpdateDate, onRetry }) {
   );
 }
 
-const CHIPS = [
-  { label: 'Create Expense',          desc: 'Log a new expense',                    icon: '➕', msg: 'I want to create a new expense'         },
-  { label: 'View Expenses',           desc: 'Look up by mobile number',              icon: '📋', msg: 'Show me my expenses'                    },
-  { label: 'Modify / Delete Expense', desc: 'Update or remove a record',             icon: '✏️', msg: 'I want to modify or delete an expense'  },
-  { label: 'View Analytics',          desc: 'Charts and spending summary',           icon: '📊', msg: 'Show my spending analytics'             },
-];
+// ── PreviewCard — structured, no magic strings ────────────────────────────────
+function PreviewCard({ collected, profile: p, onConfirm, onEdit }) {
+  return (
+    <div className="bg-blue-50 border border-blue-200 rounded-2xl rounded-bl-sm px-4 py-3 shadow-sm text-sm w-80">
+      <p className="text-blue-700 font-medium mb-2">Here's what I've collected:</p>
+      <table className="w-full mb-2">
+        <tbody>
+          {Object.entries(collected).map(([k, v]) => (
+            <tr key={k} className="border-b border-blue-100 last:border-0">
+              <td className="py-1 text-gray-500 w-2/5 text-xs">{FIELD_LABELS[k] || k}</td>
+              <td className="py-1 text-gray-800 font-medium text-xs">{String(v)}</td>
+              <td className="py-1 text-right">
+                <button onClick={() => onEdit(k)} className="text-xs text-blue-500 hover:underline">Edit</button>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {p && (
+        <>
+          <p className="text-gray-500 text-xs font-medium border-t border-blue-100 pt-2 mb-1">Your saved profile:</p>
+          <div className="space-y-0.5 mb-2">
+            <p className="text-gray-600 text-xs">• {p.full_name} · {p.default_card_type}</p>
+            <p className="text-gray-600 text-xs">• {p.contact_number}</p>
+            <p className="text-gray-600 text-xs truncate">• {p.email}</p>
+          </div>
+        </>
+      )}
+      <p className="text-gray-500 text-xs border-t border-blue-100 pt-2 mb-2">Anything to change? Or confirm to save.</p>
+      <button onClick={onConfirm}
+        className="w-full bg-blue-600 text-white py-1.5 rounded-xl text-xs font-medium hover:bg-blue-700 transition">
+        Looks good, confirm →
+      </button>
+    </div>
+  );
+}
 
 // ── Main ──────────────────────────────────────────────────────────────────────
 export default function AIChatWindow({ profile }) {
   const { resetConversation } = useConversation();
 
-  // Profile fields that can be pre-filled (session-only overrides allowed)
   const profileSlots = profile ? {
     full_name:      profile.full_name,
     card_type:      profile.default_card_type,
@@ -183,70 +214,69 @@ export default function AIChatWindow({ profile }) {
     email:          profile.email,
   } : {};
 
-  const [messages,     setMessages]     = useState([]);
-  const [input,        setInput]        = useState('');
-  const [isLoading,    setIsLoading]    = useState(false);
-  const [flow,         setFlow]         = useState(null);
-  const [slots,        setSlots]        = useState({});
-  const [expenses,     setExpenses]     = useState(null);
-  const [awaitContact, setAwaitContact] = useState(false);
-  const [showSummary,  setShowSummary]  = useState(false);
-  const [submitting,   setSubmitting]   = useState(false);
-  const [submitError,  setSubmitError]  = useState('');
-  const [showAnalytics,setShowAnalytics]= useState(false);
-  const [aiCallCount,  setAiCallCount]  = useState(0);
-  const [lastContact,  setLastContact]  = useState(null);   // remembered across flows
-  const [contactPrompt,setContactPrompt]= useState(false);  // show yes/other UI
-  const [newContactVal,setNewContactVal]= useState('');
+  const [messages,      setMessages]      = useState([]);
+  const [input,         setInput]         = useState('');
+  const [isLoading,     setIsLoading]     = useState(false);
+  const [flow,          setFlow]          = useState(null);
+  const [slots,         setSlots]         = useState({});
+  const [expenses,      setExpenses]      = useState(null);
+  const [awaitContact,  setAwaitContact]  = useState(false);
+  const [showPreview,   setShowPreview]   = useState(false);  // pre-confirm review
+  const [showSummary,   setShowSummary]   = useState(false);  // final summary card
+  const [submitting,    setSubmitting]    = useState(false);
+  const [submitError,   setSubmitError]   = useState('');
+  const [showAnalytics, setShowAnalytics] = useState(false);
+  const [lastContact,   setLastContact]   = useState(null);
+  const [contactPrompt, setContactPrompt] = useState(false);
+  const [editingField,  setEditingField]  = useState(null);
+
+  // Fix #3: use ref for AI call count to avoid race conditions
+  const aiCallCountRef = useRef(0);
+  const [aiCallDisplay, setAiCallDisplay] = useState(0);
 
   const bottomRef = useRef(null);
   useEffect(() => { bottomRef.current?.scrollIntoView({ behavior: 'smooth' }); },
-    [messages, isLoading, showSummary, expenses]);
+    [messages, isLoading, showSummary, showPreview, expenses]);
 
   const addMsg = (role, text) =>
     setMessages((prev) => [...prev, { role, text, timestamp: new Date() }]);
 
-  const handleBack = () => {
-    setMessages([]); setFlow(null); setSlots({}); setExpenses(null);
-    setAwaitContact(false); setShowSummary(false); setSubmitError('');
-    setShowAnalytics(false); setContactPrompt(false); setNewContactVal('');
-    setLastContact(null); // clear remembered number on back
+  const resetFlow = useCallback(() => {
+    setFlow(null); setSlots({}); setExpenses(null);
+    setAwaitContact(false); setShowPreview(false); setShowSummary(false);
+    setSubmitError(''); setShowAnalytics(false);
+    setContactPrompt(false); setEditingField(null);
     resetConversation();
-  };
+  }, [resetConversation]);
+
+  const handleBack = () => { setMessages([]); resetFlow(); setLastContact(null); };
 
   // ── Core AI call ────────────────────────────────────────────────────────────
-  const callAI = async (userText) => {
-    if (aiCallCount >= AI_LIMIT) {
-      addMsg('bot', `⚠️ AI limit reached for this session. Please refresh to continue.`);
+  const callAI = async (userText, currentSlots) => {
+    if (aiCallCountRef.current >= AI_LIMIT) {
+      addMsg('bot', '⚠️ AI limit reached for this session. Please refresh to continue.');
       return null;
     }
-    setAiCallCount((c) => c + 1);
-
-    const base = import.meta.env.VITE_API_BASE_URL;
-    console.log('[AI] Calling /api/ai-chat via base:', base);
-    console.log('[AI] Message:', userText);
+    aiCallCountRef.current += 1;
+    setAiCallDisplay(aiCallCountRef.current);
 
     const timeout = new Promise((_, reject) =>
       setTimeout(() => reject(new Error('Response timed out. Please try again.')), 30000)
     );
-
     try {
       const res = await Promise.race([
-        aiChat(userText, messages, slots, profile),
+        aiChat(userText, messages, currentSlots, profile),
         timeout,
       ]);
-      console.log('[AI] Response:', res);
       return res;
     } catch (e) {
-      console.error('[AI] Error:', e.message);
       addMsg('bot', `⚠️ ${e.message}`);
       return null;
     }
   };
 
-  // ── Merge AI-extracted fields into slots ────────────────────────────────────
-  const mergeFields = (currentSlots, rawFields) => {
-    const updated = { ...currentSlots };
+  const mergeFields = (base, rawFields) => {
+    const updated = { ...base };
     for (const [f, v] of Object.entries(rawFields || {})) {
       if (!v) continue;
       if (validateField(f, v)) updated[f] = f === 'amount' ? Number(v) : v;
@@ -254,187 +284,210 @@ export default function AIChatWindow({ profile }) {
     return updated;
   };
 
-  // ── Fetch expenses ──────────────────────────────────────────────────────────
-  const fetchExpenses = async (contact) => {
+  const fetchExpenses = async (contact, currentFlow) => {
     setIsLoading(true);
     setContactPrompt(false);
     try {
       const data = await getExpensesByContact(contact);
-      setExpenses(data); setAwaitContact(false);
-      setLastContact(contact); // remember for next time
+      setExpenses(data); setAwaitContact(false); setLastContact(contact);
       addMsg('bot', data.length === 0
-        ? "I couldn't find any expenses for that number. Want to try a different one?"
-        : `Found ${data.length} expense(s) for you. ${flow === 'modify' ? 'You can change the date or delete any of them below.' : 'Here they are:'}`
+        ? "No expenses found for that number. Want to try a different one?"
+        : `Found ${data.length} expense(s). ${currentFlow === 'modify' ? 'Use the buttons below to edit or delete.' : 'Here they are:'}`
       );
     } catch (e) {
-      addMsg('bot', `Hmm, I couldn't fetch those expenses: ${e.message}. Try again?`);
+      addMsg('bot', `Couldn't fetch expenses: ${e.message}. Try again?`);
       setAwaitContact(true);
     } finally { setIsLoading(false); }
   };
 
-  // Show smart contact prompt if we already have a number
-  const triggerContactFlow = () => {
+  const triggerContactFlow = (currentFlow) => {
     if (lastContact) {
       setContactPrompt(true);
-      setNewContactVal('');
-      addMsg('bot', `I have your number on file: ${lastContact}\nWould you like to continue with the same number?`);
+      addMsg('bot', `I have ${lastContact} on file. Use the same number?`);
     } else {
       setAwaitContact(true);
-      addMsg('bot', 'Enter your mobile number (with country code) to fetch your expenses.');
+      addMsg('bot', 'Enter your mobile number (with country code) to continue.');
     }
   };
 
-  // ── Main send ───────────────────────────────────────────────────────────────
-  const handleSend = async () => {
-    const text = input.trim();
+  // ── Unified send handler (Fix #4) ──────────────────────────────────────────
+  const send = useCallback(async (text) => {
     if (!text || isLoading) return;
-    setInput('');
     addMsg('user', text);
     setIsLoading(true);
 
     try {
+      // ── Editing a field from preview/summary ────────────────────────────
+      if (editingField) {
+        const field = editingField;
+        setEditingField(null);
+        let value = text.trim();
+        if (field === 'amount') value = Number(value);
+        if (validateField(field, value)) {
+          const updated = { ...slots, [field]: value };
+          setSlots(updated);
+          setShowPreview(false);
+          setShowSummary(false);
+          // Re-check if all expense fields still filled after edit
+          const allFilled = EXPENSE_FIELDS.every(f => validateField(f, updated[f]));
+          if (allFilled) {
+            setShowPreview(true);
+          } else {
+            addMsg('bot', `Updated ${FIELD_LABELS[field]}. What's the ${FIELD_LABELS[EXPENSE_FIELDS.find(f => !validateField(f, updated[f]))]}?`);
+          }
+        } else {
+          const res = await callAI(text, slots);
+          const extracted = res?.fields?.[field];
+          if (extracted && validateField(field, extracted)) {
+            const updated = { ...slots, [field]: extracted };
+            setSlots(updated);
+            setShowPreview(true);
+          } else {
+            addMsg('bot', res?.reply || `That doesn't look right for ${FIELD_LABELS[field]}. Try again?`);
+            setEditingField(field);
+          }
+        }
+        setIsLoading(false);
+        return;
+      }
+
       // ── Awaiting contact number ─────────────────────────────────────────
       if (awaitContact) {
         const phoneMatch = text.match(/(\+\d{1,4}\s?\d{10})/);
         if (phoneMatch) {
           setIsLoading(false);
-          await fetchExpenses(phoneMatch[1].replace(/\s/g, ''));
+          await fetchExpenses(phoneMatch[1].replace(/\s/g, ''), flow);
           return;
         }
-        // No phone found — let AI respond naturally
-        const res = await callAI(text);
+        const res = await callAI(text, slots);
         if (res?.reply) addMsg('bot', res.reply);
         setIsLoading(false);
         return;
       }
 
-      // ── Call AI for everything ──────────────────────────────────────────
-      const res = await callAI(text);
+      // ── Pre-confirm stage: user responding to preview card ──────────────
+      if (showPreview && !showSummary) {
+        if (isConfirmText(text)) {
+          setShowPreview(false);
+          setShowSummary(true);
+          setIsLoading(false);
+          return;
+        }
+        // User wants to change something — let AI handle it
+        const res = await callAI(text, slots);
+        if (res?.fields && Object.keys(res.fields).length > 0) {
+          const updated = mergeFields(slots, res.fields);
+          setSlots(updated);
+          setShowPreview(false);
+          // Re-show preview with updated data
+          const allFilled = EXPENSE_FIELDS.every(f => validateField(f, updated[f]));
+          if (allFilled) setShowPreview(true);
+          else if (res.reply) addMsg('bot', res.reply);
+        } else {
+          if (res?.reply) addMsg('bot', res.reply);
+        }
+        setIsLoading(false);
+        return;
+      }
+
+      // ── Call AI ─────────────────────────────────────────────────────────
+      const currentSlots = flow === 'create' ? { ...profileSlots, ...slots } : slots;
+      const res = await callAI(text, currentSlots);
       if (!res) { setIsLoading(false); return; }
 
       const { reply, fields, intent } = res;
 
-      // ── Handle intent ───────────────────────────────────────────────────
-      if (intent === 'analytics' && flow !== 'analytics') {
-        setFlow('analytics');
-        setExpenses(null);      // hide expense card
-        setShowAnalytics(true);
+      // Fix #2: Intent always overrides flow
+      let activeFlow = flow;
+      if (intent && intent !== 'null' && intent !== flow) {
+        activeFlow = intent;
+        if (intent === 'analytics') {
+          setFlow('analytics'); setShowAnalytics(true);
+          if (reply) addMsg('bot', reply); // Fix #5: AI reply shown only when no system action
+          setIsLoading(false);
+          return;
+        }
+        if (intent === 'view' || intent === 'modify') {
+          setFlow(intent); setSlots({}); setExpenses(null);
+          setShowPreview(false); setShowSummary(false);
+          if (expenses !== null && flow === intent) {
+            addMsg('bot', intent === 'modify' ? 'Use the buttons below.' : 'Here are your expenses:');
+          } else {
+            if (reply) addMsg('bot', reply);
+            triggerContactFlow(intent);
+          }
+          setIsLoading(false);
+          return;
+        }
+        if (intent === 'create') {
+          setFlow('create');
+          setSlots(profileSlots);
+          setExpenses(null); setShowPreview(false); setShowSummary(false);
+          activeFlow = 'create';
+        }
+      }
+
+      // ── Create flow: merge fields ───────────────────────────────────────
+      if (activeFlow === 'create') {
+        const base = { ...profileSlots, ...slots };
+        const updatedSlots = mergeFields(base, fields);
+        setSlots(updatedSlots);
+
+        const allExpenseFilled = EXPENSE_FIELDS.every(f => validateField(f, updatedSlots[f]));
+
+        // Fix #5: system action takes priority — don't show AI reply if showing preview
+        if (allExpenseFilled) {
+          setShowPreview(true);
+          setIsLoading(false);
+          return;
+        }
+        // Not all filled yet — show AI reply to ask for next field
         if (reply) addMsg('bot', reply);
         setIsLoading(false);
         return;
       }
 
-      if ((intent === 'view' || intent === 'modify') && flow !== intent) {
-        setFlow(intent);
-        setSlots({});
-        if (expenses !== null) {
-          addMsg('bot', intent === 'modify'
-            ? 'Sure! Use the Change Date or Delete buttons on any expense below.'
-            : 'Here are your expenses:');
-          setIsLoading(false);
-          return;
-        }
-        triggerContactFlow();
-        setIsLoading(false);
-        return;
-      }
-
-      if (intent === 'modify' && flow === 'view' && expenses !== null) {
-        setFlow('modify');
-        addMsg('bot', 'Sure! Use the Change Date or Delete buttons on any expense below.');
-        setIsLoading(false);
-        return;
-      }
-
-      if (intent === 'create' && !flow) {
-        setFlow('create');
-        setSlots(profileSlots); // pre-fill from profile
-        setExpenses(null);
-      }
-
-      // ── Merge extracted fields ──────────────────────────────────────────
-      const updatedSlots = mergeFields(flow === 'create' ? slots : {}, fields);
-      if (flow === 'create' || intent === 'create') setSlots(updatedSlots);
-
-      // ── Show AI reply ───────────────────────────────────────────────────
+      // ── Default: show AI reply ──────────────────────────────────────────
       if (reply) addMsg('bot', reply);
-
-      // ── Check if all slots filled for create flow ───────────────────────
-      if ((flow === 'create' || intent === 'create') &&
-          SLOT_ORDER.every((s) => updatedSlots[s])) {
-        setShowSummary(true);
-      }
 
     } catch (e) {
       addMsg('bot', `Something went wrong: ${e.message}`);
     } finally {
       setIsLoading(false);
     }
+  }, [isLoading, editingField, awaitContact, showPreview, showSummary, flow, slots, expenses, lastContact, profile, profileSlots, messages]);
+
+  const handleSend = () => {
+    const text = input.trim();
+    if (!text) return;
+    setInput('');
+    send(text);
   };
 
   const handleKeyDown = (e) => {
     if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); handleSend(); }
   };
 
-  const handleChipClick = (chip) => {
-    addMsg('user', chip.msg);
-    setInput('');
-    // Simulate sending the chip message
-    const syntheticEvent = { target: { value: chip.msg } };
-    setInput(chip.msg);
-    setTimeout(() => {
-      setInput('');
-      // Directly trigger the send with the chip message
-      handleSendText(chip.msg);
-    }, 0);
-  };
-
-  const handleSendText = async (text) => {
-    if (!text || isLoading) return;
-    addMsg('user', text);
-    setIsLoading(true);
-
-    try {
-      const res = await callAI(text);
-      if (!res) { setIsLoading(false); return; }
-      const { reply, intent } = res;
-
-      if (intent === 'analytics') {
-        setFlow('analytics'); setShowAnalytics(true);
-        if (reply) addMsg('bot', reply);
-      } else if (intent === 'view' || intent === 'modify') {
-        setFlow(intent); setSlots({}); setExpenses(null); setAwaitContact(true);
-        addMsg('bot', reply || 'Enter your mobile number to fetch your expenses.');
-      } else if (intent === 'create') {
-        setFlow('create'); setSlots(profileSlots);
-        addMsg('bot', reply || "Let's log a new expense. What's your full name?");
-      } else {
-        if (reply) addMsg('bot', reply);
-      }
-    } catch (e) {
-      addMsg('bot', `Something went wrong: ${e.message}`);
-    } finally { setIsLoading(false); }
-  };
-
   const handleConfirmSubmit = async () => {
     setSubmitting(true); setSubmitError('');
     try {
       const res = await createExpense(slots);
-      setShowSummary(false);
-      addMsg('bot', `Your expense has been saved! 🎉 (ID: ${res.id})\n\nWould you like to log another one or do something else?`);
-      setFlow(null); setSlots({});
-    } catch (err) { setSubmitError(`Something went wrong: ${err.message}`); }
-    finally { setSubmitting(false); }
+      setShowSummary(false); setShowPreview(false);
+      addMsg('bot', `Expense saved! 🎉 (ID: ${res.id})\n\nWant to log another or do something else?`);
+      resetFlow();
+    } catch (err) {
+      setSubmitError(`Something went wrong: ${err.message}`);
+    } finally { setSubmitting(false); }
   };
 
   const handleEditField = (field) => {
-    addMsg('bot', `Sure! What should I change ${FIELD_LABELS[field]} to?`);
+    setEditingField(field);
+    setShowPreview(false);
     setShowSummary(false);
-    // Next message will be treated as the new value for this field
-    // We handle this by letting AI pick it up naturally
+    addMsg('bot', `What should I change ${FIELD_LABELS[field]} to?`);
   };
 
-  const allFilled = SLOT_ORDER.every((s) => slots[s]);
+  const allFilled = SLOT_ORDER.every((s) => validateField(s, slots[s]));
 
   if (showAnalytics) {
     return (
@@ -443,26 +496,29 @@ export default function AIChatWindow({ profile }) {
           <button onClick={handleBack} className="text-sm text-blue-600 hover:underline">← Back to Menu</button>
         </div>
         <AnalyticsDashboard onBack={() => {
-          setShowAnalytics(false);
-          setFlow(null);
+          setShowAnalytics(false); setFlow(null);
           addMsg('bot', 'Back to chat! What else can I help you with?');
         }} />
       </div>
     );
   }
 
-  const hasMessages = messages.length > 0;
+  // Collected expense fields for preview card
+  const collectedForPreview = {
+    category:     slots.category,
+    amount:       slots.amount,
+    description:  slots.description,
+    expense_date: slots.expense_date,
+  };
 
   return (
     <div className="flex flex-col flex-1 overflow-hidden">
-
       {flow && (
         <div className="px-4 sm:px-6 pt-3 pb-1 shrink-0">
           <button onClick={handleBack} className="text-sm text-blue-600 hover:underline">← Back to Menu</button>
         </div>
       )}
 
-      {/* Messages */}
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-4">
         <div className="max-w-2xl mx-auto">
 
@@ -471,54 +527,58 @@ export default function AIChatWindow({ profile }) {
               <span className="text-6xl">💬</span>
               <p className="text-lg font-medium text-gray-600">Smart Mode</p>
               <p className="text-sm text-center max-w-xs">
-                Just type naturally below — say "log an expense", "show my expenses", or anything else.
+                Just type naturally — "I spent 300 on food", "show my expenses", or anything else.
               </p>
-              <p className="text-xs text-gray-300 mt-1">↓ Type in the box below</p>
             </div>
           )}
 
           {messages.map((msg, i) => <MessageBubble key={i} message={msg} />)}
           {isLoading && <TypingIndicator />}
 
-          {/* Smart contact prompt — shown when we have a previous number */}
+          {/* Contact prompt */}
           {contactPrompt && !isLoading && (
             <div className="flex items-center gap-2 my-2 flex-wrap">
-              <button
-                onClick={() => { setContactPrompt(false); fetchExpenses(lastContact); }}
-                className="px-4 py-2 bg-blue-600 text-white text-xs rounded-xl hover:bg-blue-700 transition"
-              >
+              <button onClick={() => { setContactPrompt(false); fetchExpenses(lastContact, flow); }}
+                className="px-4 py-2 bg-blue-600 text-white text-xs rounded-xl hover:bg-blue-700 transition">
                 Yes, use {lastContact}
               </button>
-              <div className="flex items-center gap-1">
-                <button
-                  onClick={() => { setContactPrompt(false); setAwaitContact(true); }}
-                  className="px-4 py-2 bg-gray-200 text-gray-700 text-xs rounded-xl hover:bg-gray-300 transition"
-                >
-                  Use a different number
-                </button>
-              </div>
+              <button onClick={() => { setContactPrompt(false); setAwaitContact(true); }}
+                className="px-4 py-2 bg-gray-200 text-gray-700 text-xs rounded-xl hover:bg-gray-300 transition">
+                Use a different number
+              </button>
             </div>
           )}
-          {aiCallCount > 0 && (
-            <p className="text-xs text-gray-300 text-right mt-1">AI calls: {aiCallCount}/{AI_LIMIT}</p>
+
+          {aiCallDisplay > 0 && (
+            <p className="text-xs text-gray-300 text-right mt-1">AI calls: {aiCallDisplay}/{AI_LIMIT}</p>
           )}
 
-          {/* Expense list — only show when in view/modify flow, not analytics */}
-          {expenses !== null && (flow === 'view' || flow === 'modify') && !isLoading && !showAnalytics && (
+          {/* Expense list */}
+          {expenses !== null && (flow === 'view' || flow === 'modify') && !isLoading && (
             <ExpenseList expenses={expenses} mode={flow}
               onDelete={async (id) => { await deleteExpense(id); setExpenses((p) => p.filter((e) => e.id !== id)); }}
               onUpdateDate={async (id, date) => { const u = await updateExpenseDate(id, date); setExpenses((p) => p.map((e) => e.id === id ? u : e)); }}
-              onRetry={() => { setExpenses(null); setAwaitContact(true); addMsg('bot', 'No problem — enter your mobile number again:'); }}
+              onRetry={() => { setExpenses(null); setAwaitContact(true); addMsg('bot', 'Enter your mobile number:'); }}
             />
           )}
 
-          {/* Confirmation summary */}
+          {/* Pre-confirm preview card — Fix #6: structured component, no magic string */}
+          {showPreview && flow === 'create' && !showSummary && !isLoading && (
+            <PreviewCard
+              collected={collectedForPreview}
+              profile={profile}
+              onConfirm={() => { setShowPreview(false); setShowSummary(true); }}
+              onEdit={handleEditField}
+            />
+          )}
+
+          {/* Final summary card */}
           {showSummary && flow === 'create' && allFilled && (
             <SummaryCard slots={slots}
               onEdit={handleEditField} onConfirm={handleConfirmSubmit}
               submitting={submitting} submitError={submitError}
               onRetry={handleConfirmSubmit}
-              onCancel={() => { setShowSummary(false); setSubmitError(''); handleBack(); }}
+              onCancel={() => { setShowSummary(false); setSubmitError(''); resetFlow(); }}
             />
           )}
 
@@ -526,7 +586,6 @@ export default function AIChatWindow({ profile }) {
         </div>
       </div>
 
-      {/* Input bar — prominent, no chips */}
       <div className="shrink-0 bg-white border-t border-gray-200 px-4 sm:px-6 py-4">
         <div className="max-w-2xl mx-auto flex gap-2">
           <input type="text" value={input}
