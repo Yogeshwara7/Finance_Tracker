@@ -4,105 +4,68 @@
  */
 import { Router } from 'express';
 
-const router = Router();
+const router   = Router();
+const HF_MODEL = process.env.HF_MODEL || 'Qwen/Qwen2.5-72B-Instruct:featherless-ai';
 
-const HF_MODEL = process.env.HF_MODEL || 'Qwen/Qwen2.5-72B-Instruct';
+// ── Response validator ────────────────────────────────────────────────────────
+const VALID_INTENTS = new Set(['create', 'view', 'modify', 'analytics']);
 
+function validateResponse(raw) {
+  if (!raw || typeof raw !== 'object') return null;
+  const reply       = typeof raw.reply  === 'string' ? raw.reply  : '';
+  const fields      = raw.fields && typeof raw.fields === 'object' ? raw.fields : {};
+  const intent = raw.intent === null ? null : (VALID_INTENTS.has(raw.intent) ? raw.intent : null);
+  const suggestions = Array.isArray(raw.suggestions) ? raw.suggestions.slice(0, 3) : [];
+  const options     = Array.isArray(raw.options) ? raw.options.slice(0, 5) : [];
+  const quiz        = Array.isArray(raw.quiz) ? raw.quiz : [];
+  return { reply, fields, intent, suggestions, options, quiz };
+}
+
+// ── Date helpers ──────────────────────────────────────────────────────────────
+function getDates() {
+  const now       = new Date();
+  const yesterday = new Date(now);
+  yesterday.setDate(yesterday.getDate() - 1);
+  const fmt = (d) =>
+    `${String(d.getDate()).padStart(2, '0')}-${String(d.getMonth() + 1).padStart(2, '0')}-${d.getFullYear()}`;
+  return { today: fmt(now), yesterday: fmt(yesterday) };
+}
+
+// ── HuggingFace call ──────────────────────────────────────────────────────────
 async function callHuggingFace(messages) {
   const res = await fetch('https://router.huggingface.co/v1/chat/completions', {
-    method: 'POST',
+    method:  'POST',
     headers: {
       'Authorization': `Bearer ${process.env.HF_API_KEY}`,
-      'Content-Type': 'application/json',
+      'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      model: HF_MODEL,
+      model:       HF_MODEL,
       messages,
-      temperature: 0.2,   // lower = more deterministic
-      max_tokens: 512,
+      temperature: 0.2,
+      max_tokens:  1024,
     }),
   });
 
   if (!res.ok) {
     const err = await res.text();
-    console.error('[AI Chat] HuggingFace error:', res.status, err);
+    console.error('[AI Chat] HuggingFace HTTP error:', res.status, err);
     return null;
   }
+
   const json = await res.json();
-  return json.choices?.[0]?.message?.content?.trim() || null;
+  if (!json.choices?.length) {
+    console.error('[AI Chat] Empty choices array');
+    return null;
+  }
+  return json.choices[0].message?.content?.trim() || null;
 }
 
-// Fix #2: deterministic, structured extraction over creative interpretation
-// Fix #3: strict JSON enforcement
-// Fix #4: ambiguity guard — ask if category unclear
-const SYSTEM_PROMPT = `You are Finn, a friendly and intelligent expense tracking assistant. You think like a human assistant — you understand what the user wants from context, not just keywords.
-
-## YOUR PERSONALITY
-You are warm, helpful, and conversational. You follow the user's lead. You don't ask unnecessary questions. You reason about what the user means and respond naturally.
-
-## WHAT YOU CAN HELP WITH
-1. Logging a new expense
-2. Viewing the user's expense history
-3. Editing or deleting an expense (only date changes and deletes are supported)
-4. Showing spending analytics
-
-## HOW TO THINK ABOUT INTENT
-Don't pattern-match keywords. Think about what the user actually wants:
-- If they mention spending money, buying something, or want to log/add/record → they want to create an expense
-- If they want to see, check, view, or list their expenses → they want to view
-- If they want to change, edit, update, delete, or remove an expense → they want to modify
-- If they ask about spending patterns, summaries, charts, or analytics → they want analytics
-- Anything else → respond helpfully with intent null
-
-## EXPENSE CREATION
-When creating an expense, you need: category, amount, description, expense_date.
-The user's profile already has their name, card type, phone, and email — never ask for these.
-
-Categories (only 3): Food, Transport, Shopping
-- Food: anything edible — restaurants, delivery, groceries, drinks
-- Transport: travel costs — cab, fuel, metro, flight, bus (NOT buying a vehicle)
-- Shopping: buying physical things — clothes, electronics, furniture, vehicles, gadgets
-
-Date rules: today = 09-04-2026, yesterday = 08-04-2026, default year = 2026
-
-Extract everything the user gives you in one message. Ask for only one missing thing at a time. Be natural about it.
-
-## EXPENSE MODIFICATION
-Only date changes and deletes are supported.
-If user wants to change something else (amount, category, card), tell them kindly that only date and delete are supported, and suggest creating a new expense instead.
-
-For date changes: extract which expense (by category, description, or position like "2nd", "last") and the new date.
-For deletes: extract which expense to delete.
-
-## OUTPUT FORMAT
-Always respond with ONLY a valid JSON object — no text outside it, no markdown:
-{"reply": "your response", "fields": {}, "intent": "create|view|modify|analytics|null"}
-
-For modify actions include action details in fields:
-{"reply": "...", "fields": {"action": "update_date", "match_category": "Food", "new_date": "03-04-2026"}, "intent": "modify"}
-{"reply": "...", "fields": {"action": "delete", "match_position": 2}, "intent": "modify"}
-
-## EXAMPLES
-User: "hi" → {"reply": "Hey! 👋 I'm Finn, your expense assistant. Want to log something, check your expenses, or see your analytics?", "fields": {}, "intent": null}
-User: "I spent 500 on food" → {"reply": "₹500 for Food — got it! What was it for?", "fields": {"category": "Food", "amount": 500}, "intent": "create"}
-User: "swiggy biryani 200 today" → {"reply": "₹200 swiggy biryani on 09-04-2026 — logged under Food!", "fields": {"category": "Food", "amount": 200, "description": "swiggy biryani", "expense_date": "09-04-2026"}, "intent": "create"}
-User: "view expense" → {"reply": "Sure! Fetching your expenses now.", "fields": {}, "intent": "view"}
-User: "show my expenses" → {"reply": "On it! Pulling up your expenses.", "fields": {}, "intent": "view"}
-User: "can i edit it" → {"reply": "Of course! Want me to pull up your expenses so you can tell me which one to change?", "fields": {}, "intent": "modify"}
-User: "change date of food to 3rd april" → {"reply": "Got it — updating the Food expense date to 03-04-2026.", "fields": {"action": "update_date", "match_category": "Food", "new_date": "03-04-2026"}, "intent": "modify"}
-User: "delete the 2nd one" → {"reply": "Deleting the 2nd expense.", "fields": {"action": "delete", "match_position": 2}, "intent": "modify"}
-User: "show analytics" → {"reply": "Opening your spending analytics!", "fields": {}, "intent": "analytics"}
-User: "how much did I spend this month" → {"reply": "Let me pull up your spending breakdown!", "fields": {}, "intent": "analytics"}`;
-
-// Fix #6: robust JSON extraction — find the outermost complete JSON object
+// ── JSON extractor ────────────────────────────────────────────────────────────
 function extractJSON(text) {
-  // Try direct parse first
   try { return JSON.parse(text); } catch {}
-
-  // Find first { and match to its closing }
   const start = text.indexOf('{');
   if (start === -1) return null;
-
   let depth = 0;
   for (let i = start; i < text.length; i++) {
     if (text[i] === '{') depth++;
@@ -116,62 +79,197 @@ function extractJSON(text) {
   return null;
 }
 
+// ── Intent normalizer ─────────────────────────────────────────────────────────
+function normalizeIntent(raw) {
+  if (raw === 'null' || raw === '' || raw === undefined) return null;
+  return raw ?? null;
+}
+
+// ── Fallback response ─────────────────────────────────────────────────────────
+const FALLBACK = (msg) => ({
+  reply: msg, fields: {}, intent: null, suggestions: [], options: [], quiz: [],
+});
+
+// ── System prompt ─────────────────────────────────────────────────────────────
+function buildSystemPrompt(profileContext, slotsContext, today, yesterday) {
+  return `You are Finn, a sharp and efficient expense tracking assistant.
+
+════════════════════════════════════════
+SECTION 0 — CONTROL & FALLBACK LOGIC (CRITICAL)
+════════════════════════════════════════
+Before doing anything, decide:
+1. Is the user talking about expenses?
+2. Can you confidently classify intent?
+
+If the message is unrelated, greeting only, or unclear:
+- intent = null, fields = {}, quiz = [], options = [], suggestions = []
+- Reply: "I can help track your expenses. Want to log something or check your spending?"
+
+STRICT RULE: If intent is null → NEVER generate quiz or options.
+
+════════════════════════════════════════
+SECTION 1 — STRICT OUTPUT CONTRACT
+════════════════════════════════════════
+You MUST respond with ONLY a single valid JSON object. No text outside. No markdown.
+Schema (ALL 6 keys required every time):
+{"reply":"<string>","fields":{},"intent":"create|view|modify|analytics|null","suggestions":[],"options":[],"quiz":[]}
+
+Rules:
+- Use null (not "null") for intent when not applicable
+- reply = plain text only, never embed JSON
+- Always include all 6 keys even if empty
+
+════════════════════════════════════════
+SECTION 2 — INTENT CLASSIFICATION
+════════════════════════════════════════
+CREATE → spent, paid, bought, ordered, cost, booked, ₹, numbers
+VIEW   → show, list, history, what did I spend
+MODIFY → delete, remove, change, update an expense
+ANALYTICS → total, how much, breakdown, compare, summary
+NULL   → unrelated / unclear / greeting
+
+════════════════════════════════════════
+SECTION 3 — CATEGORY RULES
+════════════════════════════════════════
+Food     → ANYTHING edible: chocolates, coffee, biryani, groceries, snacks, drinks, cake, juice, sweets, biscuits
+Transport → travel costs: uber, petrol, bus, metro, flight, auto, cab, toll, parking
+Shopping  → non-food physical items: clothes, electronics, furniture, gadgets, appliances, books, shoes
+
+RULE: If edible → always Food. Chocolates = Food. Never ask if obvious.
+If genuinely ambiguous → include category in quiz with options ["Food","Transport","Shopping"].
+
+════════════════════════════════════════
+SECTION 4 — CREATE FLOW
+════════════════════════════════════════
+Required: category, amount, description, expense_date
+
+1. Extract ALL fields present in user message in one shot
+2. Use quiz when intent=create AND 2+ fields missing AND at least one signal exists
+3. Use options when only 1 field missing
+4. For date: always ask with options ["Today","Yesterday","Custom date"] — never assume today
+5. For description: generate 3 context-aware options based on what user said + "Something else"
+   Example: user said "chocolates" → options: ["Cadbury chocolates","Gift chocolates","Chocolate box","Something else"]
+
+Quiz size rule:
+- If currentSlots already has some fields → quiz max 1 question for the NEXT missing field only
+- If no slots collected yet → quiz up to 3 questions for all missing fields
+
+Quiz format (max 3 steps):
+[{"question":"...","field":"...","options":[]}]
+
+════════════════════════════════════════
+SECTION 5 — MODIFY FLOW
+════════════════════════════════════════
+IMPORTANT DISTINCTION:
+- BEFORE saving (during review): ALL fields can be changed — description, amount, category, date, etc.
+- AFTER saving to DB: Only date changes and deletes are supported.
+
+When user is in review stage and asks to change any field → extract the new value and return it in fields.
+When user asks to modify an already-saved expense → only date and delete are supported, say so clearly.
+
+════════════════════════════════════════
+SECTION 6 — EXAMPLES
+════════════════════════════════════════
+User: "hi"
+→ {"reply":"Hey! I can help track your expenses. What do you need?","fields":{},"intent":null,"suggestions":[],"options":[],"quiz":[]}
+
+User: "tell me a joke"
+→ {"reply":"I can help track your expenses. Want to log something or check your spending?","fields":{},"intent":null,"suggestions":[],"options":[],"quiz":[]}
+
+User: "spent 200"
+→ {"reply":"Got it! Let me get a few details:","fields":{"amount":200},"intent":"create","suggestions":[],"options":[],"quiz":[{"question":"What category?","field":"category","options":["Food","Transport","Shopping"]},{"question":"What was it for?","field":"description","options":[]},{"question":"When was this?","field":"expense_date","options":["Today","Yesterday","Custom date"]}]}
+
+User: "i spent 100 on chocolates"
+→ {"reply":"₹100 for chocolates under Food — one more:","fields":{"amount":100,"category":"Food","description":"chocolates"},"intent":"create","suggestions":[],"options":["Today","Yesterday","Custom date"],"quiz":[]}
+
+User: "coffee 120"
+→ {"reply":"₹120 coffee — when was this?","fields":{"amount":120,"category":"Food","description":"coffee"},"intent":"create","suggestions":[],"options":["Today","Yesterday","Custom date"],"quiz":[]}
+
+User: "spent 500 on food"
+→ {"reply":"₹500 under Food — let me get the rest:","fields":{"amount":500,"category":"Food"},"intent":"create","suggestions":[],"options":[],"quiz":[{"question":"What was it for?","field":"description","options":["Swiggy order","Restaurant meal","Grocery run","Something else"]},{"question":"When was this?","field":"expense_date","options":["Today","Yesterday","Custom date"]}]}
+
+User: "bought shoes for 2000 yesterday"
+→ {"reply":"₹2000 for shoes on ${yesterday} — logged under Shopping!","fields":{"amount":2000,"category":"Shopping","description":"shoes","expense_date":"${yesterday}"},"intent":"create","suggestions":[],"options":[],"quiz":[]}
+
+User: "[quiz answers] description: chocolates, expense_date: 10-04-2026"
+→ {"reply":"Got it!","fields":{"description":"chocolates","expense_date":"10-04-2026"},"intent":"create","suggestions":[],"options":[],"quiz":[]}
+
+User: "show my expenses"
+→ {"reply":"Pulling up your expenses.","fields":{},"intent":"view","suggestions":[],"options":[],"quiz":[]}
+
+User: "how much did I spend this month"
+→ {"reply":"Fetching your monthly summary.","fields":{"time_period":"this_month","metric":"total"},"intent":"analytics","suggestions":[],"options":[],"quiz":[]}
+
+User: "change date of food to 5th april"
+→ {"reply":"Updating the Food expense date to 05-04-2026.","fields":{"action":"update_date","match_category":"Food","new_date":"05-04-2026"},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+
+User: "delete the last expense"
+→ {"reply":"Deleting your last expense.","fields":{"action":"delete","match_position":-1},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+
+User: "can i edit an expense"
+→ {"reply":"Sure! Want me to pull up your expenses so you can tell me which one to change?","fields":{},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+${profileContext}${slotsContext}`;
+}
+
+// ── Route ─────────────────────────────────────────────────────────────────────
 router.post('/', async (req, res) => {
   try {
     const { message, conversationHistory = [], currentSlots = {}, userProfile = null } = req.body;
     if (!message) return res.status(400).json({ error: 'message is required.' });
 
+    const { today, yesterday } = getDates();
+
     const profileContext = userProfile
-      ? `\n\nUSER PROFILE (already known — do NOT ask for these):
-full_name: ${userProfile.full_name}
-card_type: ${userProfile.default_card_type}
-contact_number: ${userProfile.contact_number}
-email: ${userProfile.email}`
+      ? `\n\nUSER PROFILE (already known — do NOT ask for these):\nfull_name: ${userProfile.full_name}\ncard_type: ${userProfile.default_card_type}\ncontact_number: ${userProfile.contact_number}\nemail: ${userProfile.email}`
       : '';
 
-    const EXPENSE_FIELDS = ['category','amount','description','expense_date'];
+    const EXPENSE_FIELDS = ['category', 'amount', 'description', 'expense_date'];
     const missing = EXPENSE_FIELDS.filter(f => !currentSlots[f]);
-    const slotsInfo = Object.keys(currentSlots).length > 0
-      ? `\n\nCOLLECTED SO FAR: ${JSON.stringify(currentSlots)}\nSTILL NEEDED: ${missing.join(', ') || 'all collected'}\nAsk for the first still-needed field only.`
+    const slotsContext = Object.keys(currentSlots).length > 0
+      ? `\n\nCOLLECTED SO FAR: ${JSON.stringify(currentSlots)}\nSTILL NEEDED: ${missing.join(', ') || 'all collected'}\nSince some fields are already collected, use quiz with MAX 1 question for the next missing field only.`
       : '';
+
+    const systemPrompt = buildSystemPrompt(profileContext, slotsContext, today, yesterday);
 
     const messages = [
-      { role: 'system', content: SYSTEM_PROMPT + profileContext + slotsInfo },
-      ...conversationHistory.slice(-10).map((m) => ({
+      { role: 'system', content: systemPrompt },
+      ...conversationHistory.slice(-6).map((m) => ({
         role: m.role === 'user' ? 'user' : 'assistant',
         content: m.text,
       })),
       { role: 'user', content: message },
     ];
 
-    const timeout = new Promise((_, reject) =>
-      setTimeout(() => reject(new Error('timeout')), 20000)
-    );
-
-    const content = await Promise.race([callHuggingFace(messages), timeout])
-      .catch(() => null);
+    // Retry once on failure
+    let content = await callHuggingFace(messages);
+    if (!content) {
+      console.log('[AI Chat] Attempt 1 failed — retrying...');
+      content = await callHuggingFace(messages);
+    }
 
     if (!content) {
-      return res.json({ reply: "Sorry, I'm having trouble right now. Please try again.", fields: {}, intent: null });
+      return res.json(FALLBACK("Sorry, I'm having trouble right now. Please try again."));
     }
 
-    // Fix #6: robust JSON extraction
-    const parsed = extractJSON(content);
-
-    if (!parsed) {
-      console.error('[AI Chat] Failed to parse JSON from:', content.slice(0, 200));
-      return res.json({ reply: content.slice(0, 300), fields: {}, intent: null });
+    const raw = extractJSON(content);
+    if (!raw) {
+      console.error('[AI Chat] JSON extraction failed. Raw:', content.slice(0, 200));
+      return res.json(FALLBACK("I got confused there. Could you rephrase that?"));
     }
 
-    res.json({
-      reply:  typeof parsed.reply  === 'string' ? parsed.reply  : "I'm here to help!",
-      fields: typeof parsed.fields === 'object' ? parsed.fields : {},
-      intent: typeof parsed.intent === 'string' ? parsed.intent : null,
-    });
+    raw.intent = normalizeIntent(raw.intent);
+
+    const validated = validateResponse(raw);
+    if (!validated) {
+      console.error('[AI Chat] Validation failed, raw:', JSON.stringify(raw).slice(0, 300));
+      return res.json(FALLBACK("I got confused there. Could you rephrase that?"));
+    }
+
+    return res.json(validated);
 
   } catch (err) {
-    console.error('[AI Chat] Error:', err.message);
-    res.json({ reply: "Something went wrong. Please try again.", fields: {}, intent: null });
+    console.error('[AI Chat] Unhandled error:', err.message);
+    return res.json(FALLBACK("Something went wrong on my end. Try again in a moment."));
   }
 });
 
