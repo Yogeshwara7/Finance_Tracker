@@ -26,9 +26,82 @@ Setup steps (if running locally):
 7. Run backend: `cd src/backend && npm run dev`
 8. Run frontend: `cd src/frontend && npm run dev`
 
+### Getting a HuggingFace API Key
+
+The AI chat feature requires a HuggingFace token with Inference Provider access:
+
+1. Go to [huggingface.co](https://huggingface.co) and create a free account
+2. Navigate to **Settings → Access Tokens** → click **New token**
+3. Give it a name, set type to **Read**, and enable **"Make calls to Inference Providers"** under the Inference section
+4. Copy the token — it starts with `hf_`
+5. Paste it as `HF_API_KEY` in your `.env`
+
+### Enabling the Featherless AI Provider (for Qwen2.5-72B)
+
+The model `Qwen/Qwen2.5-72B-Instruct` runs on the Featherless AI provider:
+
+1. Go to [huggingface.co/Qwen/Qwen2.5-72B-Instruct](https://huggingface.co/Qwen/Qwen2.5-72B-Instruct)
+2. Click **Deploy → Inference API**
+3. In the provider dropdown, select **Featherless AI**
+4. Set `HF_MODEL=Qwen/Qwen2.5-72B-Instruct:featherless-ai` in your `.env`
+
+> If Featherless AI is unavailable, use `Qwen/Qwen2.5-7B-Instruct` (smaller, works on default provider).
+
 ## Architecture Overview
 Full design document: /docs/design-doc.pdf
 Flow diagram: /docs/flow-diagram.pdf
+
+## Project Structure
+
+```
+yogeshwara-b-ps3/
+├── README.md
+├── .env.example
+├── .gitignore
+├── /src
+│   ├── /backend
+│   │   ├── server.js              # Express app entry point
+│   │   ├── /routes
+│   │   │   ├── expenses.js        # CRUD endpoints
+│   │   │   ├── analytics.js       # Spending analytics
+│   │   │   ├── aiChat.js          # AI conversation (Qwen2.5-72B)
+│   │   │   ├── aiParse.js         # NLP field extraction
+│   │   │   ├── faq.js             # FAQ keyword lookup
+│   │   │   └── profile.js         # User profile (JWT auth)
+│   │   ├── /middleware
+│   │   │   ├── validate.js        # Request validation
+│   │   │   └── errorHandler.js    # Global error handler
+│   │   └── /utils
+│   │       ├── dialogEngine.js    # Rule-based dialog engine
+│   │       ├── nlpParser.js       # Regex NLP parser
+│   │       └── mailer.js          # Email notifications
+│   └── /frontend
+│       ├── /src
+│       │   ├── App.jsx            # Root component + auth/profile gate
+│       │   ├── /components
+│       │   │   ├── AIChatWindow.jsx     # Smart Mode (AI chat)
+│       │   │   ├── ChatWindow.jsx       # Quick Mode (rule-based)
+│       │   │   ├── TaskMenu.jsx         # Quick Mode task selector
+│       │   │   ├── AnalyticsDashboard.jsx
+│       │   │   ├── LoginPage.jsx
+│       │   │   ├── ProfileSetup.jsx     # First-login profile form
+│       │   │   └── MessageBubble.jsx
+│       │   ├── /context
+│       │   │   ├── AuthContext.jsx
+│       │   │   └── ConversationContext.jsx
+│       │   ├── /api
+│       │   │   └── client.js      # Axios API client
+│       │   └── /lib
+│       │       └── supabase.js    # Supabase client
+├── /docs
+│   ├── flow-diagram.md            # Mermaid flow diagrams
+│   └── design-doc-prompt.md       # Design doc generation prompt
+├── /data
+│   ├── supabase-schema.sql        # Database schema
+│   └── seed-data.json             # Sample data
+├── /screenshots                   # App screenshots
+└── /tests                         # Batch test CSV + results
+```
 
 ## Features
 - **Smart Mode (AI)** — conversational expense logging powered by Qwen2.5-72B via HuggingFace. Understands natural language, extracts fields, detects intent, handles corrections.
