@@ -40,10 +40,11 @@ async function callHuggingFace(messages) {
       'Content-Type':  'application/json',
     },
     body: JSON.stringify({
-      model:       HF_MODEL,
+      model:           HF_MODEL,
       messages,
-      temperature: 0.2,
-      max_tokens:  1024,
+      temperature:     0.1,
+      max_tokens:      1024,
+      response_format: { type: 'json_object' }, // force JSON output where supported
     }),
   });
 
@@ -144,8 +145,10 @@ SECTION 4 — CREATE FLOW
 Required: category, amount, description, expense_date
 
 1. Extract ALL fields present in user message in one shot
-2. Use quiz when intent=create AND 2+ fields missing AND at least one signal exists
-3. Use options when only 1 field missing
+2. Use quiz ALWAYS when intent=create — even if user said nothing specific. No signals needed.
+   - All 4 fields missing → quiz with 4 questions
+   - Some fields already known → quiz only for missing ones
+3. Use options (not quiz) when only 1 field is missing
 4. For date: always ask with options ["Today","Yesterday","Custom date"] — never assume today
 5. For description: generate 3 context-aware options based on what user said + "Something else"
    Example: user said "chocolates" → options: ["Cadbury chocolates","Gift chocolates","Chocolate box","Something else"]
@@ -191,11 +194,11 @@ User: "spent 500 on food"
 User: "bought shoes for 2000 yesterday"
 → {"reply":"₹2000 for shoes on ${yesterday} — logged under Shopping!","fields":{"amount":2000,"category":"Shopping","description":"shoes","expense_date":"${yesterday}"},"intent":"create","suggestions":[],"options":[],"quiz":[]}
 
-User: "[quiz answers] description: chocolates, expense_date: 10-04-2026"
-→ {"reply":"Got it!","fields":{"description":"chocolates","expense_date":"10-04-2026"},"intent":"create","suggestions":[],"options":[],"quiz":[]}
+User: "i want to create expense"
+→ {"reply":"Sure! Let me get the details:","fields":{},"intent":"create","suggestions":[],"options":[],"quiz":[{"question":"What category?","field":"category","options":["Food","Transport","Shopping"]},{"question":"How much did you spend?","field":"amount","options":[]},{"question":"What was it for?","field":"description","options":[]},{"question":"When was this?","field":"expense_date","options":["Today","Yesterday","Custom date"]}]}
 
 User: "show my expenses"
-→ {"reply":"Pulling up your expenses.","fields":{},"intent":"view","suggestions":[],"options":[],"quiz":[]}
+→ {"reply":"Fetching your expenses now.","fields":{},"intent":"view","suggestions":[],"options":[],"quiz":[]}
 
 User: "how much did I spend this month"
 → {"reply":"Fetching your monthly summary.","fields":{"time_period":"this_month","metric":"total"},"intent":"analytics","suggestions":[],"options":[],"quiz":[]}
@@ -203,12 +206,23 @@ User: "how much did I spend this month"
 User: "change date of food to 5th april"
 → {"reply":"Updating the Food expense date to 05-04-2026.","fields":{"action":"update_date","match_category":"Food","new_date":"05-04-2026"},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
 
-User: "delete the last expense"
-→ {"reply":"Deleting your last expense.","fields":{"action":"delete","match_position":-1},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+User: "change date of samosa expense from 15th april to 16th april"
+→ {"reply":"Updating the samosa expense date to 16-04-2026.","fields":{"action":"update_date","match_description":"samosa","match_date":"15-04-2026","new_date":"16-04-2026"},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+
+User: "change the food expense dated 15-04-2026 to 20th april"
+→ {"reply":"Updating the Food expense on 15-04-2026 to 20-04-2026.","fields":{"action":"update_date","match_category":"Food","match_date":"15-04-2026","new_date":"20-04-2026"},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+
+User: "change date of #2 to 20th april"
+→ {"reply":"Updating expense #2 date to 20-04-2026.","fields":{"action":"update_date","match_position":2,"new_date":"20-04-2026"},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
+
+User: "delete #3"
+→ {"reply":"Deleting expense #3.","fields":{"action":"delete","match_position":3},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
 
 User: "can i edit an expense"
 → {"reply":"Sure! Want me to pull up your expenses so you can tell me which one to change?","fields":{},"intent":"modify","suggestions":[],"options":[],"quiz":[]}
-${profileContext}${slotsContext}`;
+${profileContext}${slotsContext}
+
+FINAL REMINDER: Your response MUST be a single valid JSON object. No text before or after. No markdown. No explanation. Just the JSON.`;
 }
 
 // ── Route ─────────────────────────────────────────────────────────────────────
@@ -238,7 +252,11 @@ router.post('/', async (req, res) => {
         content: m.text,
       })),
       { role: 'user', content: message },
+      // Reinforce JSON format at the end of every turn
     ];
+
+    // Add a reminder after the user message to force JSON
+    messages.push({ role: 'system', content: 'Respond with ONLY a valid JSON object. No text outside the JSON.' });
 
     // Retry once on failure
     let content = await callHuggingFace(messages);

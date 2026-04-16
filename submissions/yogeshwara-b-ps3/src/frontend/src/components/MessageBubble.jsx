@@ -17,7 +17,7 @@ function DeleteConfirm({ expense, onConfirm, onCancel }) {
   );
 }
 
-function ExpenseItem({ exp, mode, frozen, onDeleted, onUpdated, onDirty }) {
+function ExpenseItem({ exp, index, mode, frozen, onDeleted, onUpdated, onDirty }) {
   const [editingDate,  setEditingDate]  = useState(false);
   const [newDate,      setNewDate]      = useState('');
   const [confirming,   setConfirming]   = useState(false);
@@ -52,17 +52,22 @@ function ExpenseItem({ exp, mode, frozen, onDeleted, onUpdated, onDirty }) {
       ) : (
         <>
           <div className="flex justify-between items-start">
-            <div className="flex-1 min-w-0">
-              <div className="flex items-center gap-2 mb-0.5">
-                <span className="font-semibold text-gray-800">{exp.category}</span>
-                <span className="text-blue-600 font-semibold">₹{Number(exp.amount).toLocaleString('en-IN')}</span>
-              </div>
-              <p className="text-gray-700 text-xs mb-1">{exp.description}</p>
-              <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
-                <span>📅 {exp.expense_date}</span>
-                <span>💳 {exp.card_type}</span>
-                <span>👤 {exp.full_name}</span>
-                <span>📞 {exp.contact_number}</span>
+            <div className="flex items-start gap-3 flex-1 min-w-0">
+              <span className="w-6 h-6 rounded-md bg-gray-100 text-xs font-bold flex items-center justify-center text-gray-500 shrink-0 mt-0.5">
+                {index + 1}
+              </span>
+              <div className="flex-1 min-w-0">
+                <div className="flex items-center gap-2 mb-0.5">
+                  <span className="font-semibold text-gray-800">{exp.category}</span>
+                  <span className="text-blue-600 font-semibold">₹{Number(exp.amount).toLocaleString('en-IN')}</span>
+                </div>
+                <p className="text-gray-700 text-xs mb-1">{exp.description}</p>
+                <div className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-gray-400">
+                  <span>📅 {exp.expense_date}</span>
+                  <span>💳 {exp.card_type}</span>
+                  <span>👤 {exp.full_name}</span>
+                  <span>📞 {exp.contact_number}</span>
+                </div>
               </div>
             </div>
             {mode === 'modify' && !frozen && (
@@ -102,8 +107,8 @@ function ExpenseListMessage({ message, onDirty }) {
         <div className="bg-white border border-gray-200 rounded-2xl rounded-bl-sm px-4 py-2 shadow-sm text-sm text-gray-800 mb-2">
           {message.text}
         </div>
-        {expenses.map(exp => (
-          <ExpenseItem key={exp.id} exp={exp} mode={message.listMode} frozen={message.frozen}
+        {expenses.map((exp, idx) => (
+          <ExpenseItem key={exp.id} exp={exp} index={idx} mode={message.listMode} frozen={message.frozen}
             onDeleted={(id) => setExpenses(prev => prev.filter(e => e.id !== id))}
             onUpdated={(updated) => setExpenses(prev => prev.map(e => e.id === updated.id ? updated : e))}
             onDirty={onDirty}

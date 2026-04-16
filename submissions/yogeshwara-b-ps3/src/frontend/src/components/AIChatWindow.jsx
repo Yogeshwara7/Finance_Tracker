@@ -283,7 +283,7 @@ export default function AIChatWindow({ profile }) {
       if (data.length === 0) {
         addMsg('bot', "No expenses found. Want to try a different number?");
       } else {
-        addMsg('bot', `Found ${data.length} expense(s):`, {
+        addMsg('bot', `Here are your expenses (${data.length}):`, {
           isExpenseList: true,
           expenses: data,
           listMode: fetchMode === 'modify' ? 'modify' : 'view',
@@ -438,10 +438,16 @@ export default function AIChatWindow({ profile }) {
             if (fields.match_position) {
               const pos = fields.match_position;
               target = pos === -1 ? allExpenses[allExpenses.length - 1] : allExpenses[pos - 1];
-            } else if (fields.match_category) {
-              target = allExpenses.find(e => e.category.toLowerCase() === fields.match_category.toLowerCase());
-            } else if (fields.match_description) {
-              target = allExpenses.find(e => e.description.toLowerCase().includes(fields.match_description.toLowerCase()));
+            } else {
+              // Score-based matching — more criteria matched = better match
+              const scored = allExpenses.map(e => {
+                let score = 0;
+                if (fields.match_category && e.category.toLowerCase() === fields.match_category.toLowerCase()) score += 3;
+                if (fields.match_description && e.description.toLowerCase().includes(fields.match_description.toLowerCase())) score += 5;
+                if (fields.match_date && e.expense_date === fields.match_date) score += 4;
+                return { e, score };
+              }).filter(x => x.score > 0).sort((a, b) => b.score - a.score);
+              target = scored[0]?.e || null;
             }
             if (!target) {
               addMsg('bot', "I couldn't find that expense. Can you be more specific?");
@@ -714,15 +720,14 @@ export default function AIChatWindow({ profile }) {
         <div className="shrink-0 bg-white border-t border-gray-200 shadow-lg">
           <div className="max-w-2xl mx-auto px-4 sm:px-6 pt-4 pb-2">
             <div className="space-y-1">
-              {localField.options.map((opt, i) => {
+              {localField.options.filter(o => o !== 'Custom date').map((opt, i) => {
                 const today     = new Date();
                 const yesterday = new Date(today); yesterday.setDate(yesterday.getDate() - 1);
                 return (
                   <button key={i} onClick={() => {
                     setLocalField(null);
-                    if (opt === 'Today')        send(fmtDate(today));
-                    else if (opt === 'Yesterday')   send(fmtDate(yesterday));
-                    else if (opt === 'Custom date') setLocalField(null);
+                    if (opt === 'Today')      send(fmtDate(today));
+                    else if (opt === 'Yesterday') send(fmtDate(yesterday));
                     else send(opt);
                   }}
                     className="w-full flex items-center gap-4 px-4 py-3 rounded-xl text-sm text-left
@@ -736,6 +741,22 @@ export default function AIChatWindow({ profile }) {
                   </button>
                 );
               })}
+              {/* Inline custom date input */}
+              {localField.options.includes('Custom date') && (
+                <div className="flex items-center gap-3 px-4 py-2.5 rounded-xl border border-dashed border-gray-200 hover:border-gray-300 transition">
+                  <span className="w-7 h-7 rounded-lg bg-gray-50 text-xs flex items-center justify-center text-gray-400 shrink-0">✏️</span>
+                  <input type="text" placeholder="Custom date (DD-MM-YYYY)"
+                    className="flex-1 text-sm outline-none text-gray-700 bg-transparent placeholder-gray-400"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' && e.target.value.trim()) {
+                        setLocalField(null);
+                        send(e.target.value.trim());
+                        e.target.value = '';
+                      }
+                    }} />
+                  <span className="text-xs text-gray-300">Enter ↵</span>
+                </div>
+              )}
             </div>
             <div className="flex justify-between items-center pt-2 pb-1 border-t border-gray-100 mt-2">
               <span className="text-xs text-gray-400">Choose an option or type below</span>
