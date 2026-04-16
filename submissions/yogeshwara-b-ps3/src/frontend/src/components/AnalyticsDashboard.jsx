@@ -103,9 +103,15 @@ export default function AnalyticsDashboard({ onBack, initialContact }) {
       {error && <p className="text-sm text-red-500 mb-4">{error}</p>}
 
       {data && !hasData && (
-        <p className="text-sm text-gray-500">
-          No expenses found for {periodLabel.toLowerCase()}. Try a different period or check your mobile number.
-        </p>
+        <div className="text-center py-12">
+          <p className="text-4xl mb-3">📭</p>
+          <p className="text-gray-700 font-medium mb-1">No expenses found for {periodLabel.toLowerCase()}.</p>
+          <p className="text-sm text-gray-400 mb-4">Try a different period or check your mobile number.</p>
+          <button onClick={handleBack}
+            className="text-sm text-blue-600 hover:underline">
+            Want to create an expense? ← Go back
+          </button>
+        </div>
       )}
 
       {hasData && (

@@ -132,7 +132,20 @@ yogeshwara-b-ps3/
 | POST | `/api/ai-chat` | AI conversation |
 | GET/POST | `/api/profile` | User profile |
 
-## Known Limitations
+## FAQ Responses (Inline — no dialog triggered)
+
+| User Input | Bot Response |
+|---|---|
+| "What categories are supported?" | We support Food, Transport, and Shopping. |
+| "What card types can I use?" | Debit Card or Credit Card. |
+| "What date format should I use?" | Use DD-MM-YYYY format — e.g. 15-04-2026. |
+| "How do I delete an expense?" | Say "delete #2" or "delete the food expense" after viewing your expenses. |
+| "Is my data secure?" | Your data is stored securely in Supabase and never shared. |
+| "How do I edit an expense?" | You can change the date of any saved expense. Say "change date of #2 to 20th april". |
+| "What is the contact number format?" | Include country code + 10 digits, e.g. +919876543210. |
+| "What is the amount format?" | Enter any positive number — e.g. 250 or 1499.50. No currency symbol needed. |
+
+
 - Supabase free tier pauses after inactivity — resume project if demo appears offline.
 - HuggingFace free tier has rate limits — AI responses may be slow under load.
 - Only date changes and deletes are supported for expense modification (no amount/category edits).

@@ -51,8 +51,8 @@ const HINTS = {
 
 const TASK_OPENERS = {
   create: "I already have your profile details on file.\n\nJust tell me: what category? (Food / Transport / Shopping)",
-  view:   "Fetching your expenses now...",
-  modify: "Fetching your expenses — you can change the date or delete any of them.",
+  view:   null,
+  modify: null,
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -503,7 +503,7 @@ const initialState = {
   slots:       emptySlots(),
   isLoading:   false,
   turnCount:   0,
-  aiMode:      false,  // false = rule-based, true = AI (OpenRouter)
+  aiMode:      true,   // true = AI (OpenRouter) — Smart Mode is the default
 };
 
 function reducer(state, action) {
@@ -556,7 +556,7 @@ export function ConversationProvider({ children }) {
     } catch { return null; }
   })();
 
-  const [state, dispatch] = useReducer(reducer, saved || initialState);
+  const [state, dispatch] = useReducer(reducer, saved ? { ...saved, aiMode: true } : initialState);
   const { messages, currentTask, slots, isLoading, aiMode } = state;
 
   // Persist state to localStorage on every change

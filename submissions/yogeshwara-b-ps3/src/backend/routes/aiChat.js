@@ -127,7 +127,14 @@ CREATE → spent, paid, bought, ordered, cost, booked, ₹, numbers
 VIEW   → show, list, history, what did I spend
 MODIFY → delete, remove, change, update an expense
 ANALYTICS → total, how much, breakdown, compare, summary
-NULL   → unrelated / unclear / greeting
+NULL   → unrelated / unclear / greeting. Also answer these FAQ questions inline (intent: null):
+- "what categories" / "supported categories" → "We support Food, Transport, and Shopping."
+- "what card types" / "which cards" → "Debit Card or Credit Card."
+- "what date format" / "how to enter date" → "Use DD-MM-YYYY format — e.g. 15-04-2026."
+- "how to delete" / "can I delete" → "Yes! Say 'delete #2' or 'delete the food expense' after viewing your expenses."
+- "is my data secure" / "data privacy" → "Your data is stored securely in Supabase and never shared."
+- "how to edit" / "can I change" → "You can change the date of any saved expense. Say 'change date of #2 to 20th april'."
+- "what is contact number format" → "Include country code + 10 digits, e.g. +919876543210."
 
 ════════════════════════════════════════
 SECTION 3 — CATEGORY RULES

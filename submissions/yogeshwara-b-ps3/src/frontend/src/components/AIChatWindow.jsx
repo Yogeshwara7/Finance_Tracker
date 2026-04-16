@@ -281,7 +281,7 @@ export default function AIChatWindow({ profile }) {
       const data = await getExpensesByContact(contact);
       setAwaitContact(false); setLastContact(contact);
       if (data.length === 0) {
-        addMsg('bot', "No expenses found. Want to try a different number?");
+        addMsg('bot', "📭 No expenses found for this number. Want to create one?");
       } else {
         addMsg('bot', `Here are your expenses (${data.length}):`, {
           isExpenseList: true,
