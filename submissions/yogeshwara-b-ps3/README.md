@@ -109,8 +109,7 @@ yogeshwara-b-ps3/
 - **User Profile** — collected on first login, pre-fills name/card/phone/email for all future expenses.
 - **View Expenses** — fetch all expenses by contact number, shown inline in chat history.
 - **Modify / Delete** — change expense date or delete with confirmation before executing.
-- **Analytics Dashboard** — spending breakdown by category (bar chart), monthly total, last 5 transactions.
-- **Email Notifications** — confirmation email sent after each expense is saved.
+- **Analytics Dashboard** — spending breakdown by category (bar chart), monthly total
 
 ## Validation Rules Implemented
 - Name: first and last name required (min 2 words)
