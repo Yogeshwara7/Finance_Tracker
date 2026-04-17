@@ -93,7 +93,7 @@ function ExpenseItem({ exp, index, mode, frozen, onDeleted, onUpdated, onDirty }
   );
 }
 
-function ExpenseListMessage({ message, onDirty }) {
+function ExpenseListMessage({ message, onDirty, onChangeNumber }) {
   const [expenses, setExpenses] = useState([]);
   const time = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -114,6 +114,13 @@ function ExpenseListMessage({ message, onDirty }) {
             onDirty={onDirty}
           />
         ))}
+        {message.showChangeNumber && !message.frozen && onChangeNumber && (
+          <button
+            onClick={onChangeNumber}
+            className="mt-1 text-xs text-blue-500 hover:text-blue-700 hover:underline transition">
+            🔄 Use a different number
+          </button>
+        )}
         <span className="text-xs text-gray-400 mt-1 px-1">{time}</span>
       </div>
     </div>
@@ -145,11 +152,11 @@ function FrozenReview({ slots }) {
   );
 }
 
-export default function MessageBubble({ message, onDirty }) {
+export default function MessageBubble({ message, onDirty, onChangeNumber }) {
   const isUser = message.role === 'user';
   const time   = new Date(message.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
-  if (message.isExpenseList) return <ExpenseListMessage message={message} onDirty={onDirty} />;
+  if (message.isExpenseList) return <ExpenseListMessage message={message} onDirty={onDirty} onChangeNumber={onChangeNumber} />;
   if (message.isReview && message.frozen) {
     return (
       <div className="flex justify-start mb-3">

@@ -287,6 +287,7 @@ export default function AIChatWindow({ profile }) {
           isExpenseList: true,
           expenses: data,
           listMode: fetchMode === 'modify' ? 'modify' : 'view',
+          showChangeNumber: true,
         });
       }
     } catch (e) {
@@ -561,7 +562,14 @@ export default function AIChatWindow({ profile }) {
           )}
 
           {messages.map((msg, i) => (
-            <MessageBubble key={msg.timestamp + '-' + i} message={msg} />
+            <MessageBubble key={msg.timestamp + '-' + i} message={msg} onChangeNumber={
+              msg.isExpenseList && msg.showChangeNumber && !msg.frozen
+                ? () => {
+                    setAwaitContact(true);
+                    addMsg('bot', 'Sure — enter the mobile number you want to look up (with country code):');
+                  }
+                : undefined
+            } />
           ))}
 
           {isLoading && <TypingIndicator />}
